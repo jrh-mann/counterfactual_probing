@@ -51,8 +51,8 @@ MAX_TOKENS = 32000
 
 # Experiment parameters
 NUM_COUNTERFACTUALS = 50  # Number of rollouts per sentence
-NUM_INITIAL_ROLLOUTS = 1  # Number of initial rollouts per prompt (typically 1)
-N_INITIAL_ROLLOUT_TESTS = 10  # Number of initial rollouts to generate and test before selecting one
+NUM_INITIAL_ROLLOUTS = 4 # Number of initial rollouts per prompt (typically 1)
+N_INITIAL_ROLLOUT_TESTS = 3  # Number of initial rollouts to generate and test before selecting one
 INITIAL_ROLLOUT_SELECTION_STRATEGY = "MIN"  # Strategy for selecting from N_INITIAL_ROLLOUT_TESTS: "MIN" or "MEDIAN"
 
 # Parallelization (no longer used - vLLM handles batching internally)
@@ -170,7 +170,8 @@ def main():
                     prompt_data, 
                     output_dir=OUTPUT_DIR,
                     skip_if_exists=SKIP_IF_EXISTS,
-                    prompt_pbar=prompt_pbar
+                    prompt_pbar=prompt_pbar,
+                    rollout_idx=rollout_idx
                 )
                 
                 if sentence_data_list:
@@ -221,7 +222,11 @@ def main():
     print(f"\nOutput file names:")
     for result in results:
         prompt_name = result["prompt_name"]
-        output_file = Path(OUTPUT_DIR) / f"{prompt_name}_rollouts.json"
+        rollout_idx = result.get("rollout_index", None)
+        if rollout_idx is not None:
+            output_file = Path(OUTPUT_DIR) / f"{prompt_name}_rollout_{rollout_idx}_rollouts.json"
+        else:
+            output_file = Path(OUTPUT_DIR) / f"{prompt_name}_rollouts.json"
         if output_file.exists():
             file_size = output_file.stat().st_size / 1024  # KB
             print(f"  - {output_file} ({file_size:.1f} KB)")

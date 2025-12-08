@@ -54,7 +54,8 @@ class RolloutGenerator:
         prompt_data: Dict[str, str],
         output_dir: str = "src/rollouts",
         skip_if_exists: bool = True,
-        prompt_pbar: Optional[Any] = None
+        prompt_pbar: Optional[Any] = None,
+        rollout_idx: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Process a single prompt using offline batched inference.
@@ -75,7 +76,10 @@ class RolloutGenerator:
             raise ValueError("LLM engine and sampling_params must be set before processing prompts")
         
         prompt_name = prompt_data.get("name", "unknown")
-        output_path = Path(output_dir) / f"{prompt_name}_rollouts.json"
+        if rollout_idx is not None:
+            output_path = Path(output_dir) / f"{prompt_name}_rollout_{rollout_idx}_rollouts.json"
+        else:
+            output_path = Path(output_dir) / f"{prompt_name}_rollouts.json"
         
         # Check if output already exists
         if skip_if_exists and output_path.exists():
