@@ -21,6 +21,14 @@ except ImportError:
     print("Warning: tqdm not installed. Install with: pip install tqdm")
     print("Progress bars will be limited without tqdm.\n")
 
+try:
+    from vllm import LLM, SamplingParams
+    HAS_VLLM = True
+except ImportError:
+    HAS_VLLM = False
+    print("Error: vllm not installed. Install with: pip install vllm")
+    sys.exit(1)
+
 from rollouts.generate import RolloutGenerator
 
 
@@ -32,9 +40,10 @@ from rollouts.generate import RolloutGenerator
 PROMPTS_FILE = "src/data/reward_hacking_prompts.json"
 OUTPUT_DIR = "src/rollouts"
 
-# API configuration
-API_URL = "http://localhost:8000"
+# Model configuration
 MODEL = "openai/gpt-oss-20b"
+TENSOR_PARALLEL_SIZE = 1  # Number of GPUs to use for tensor parallelism
+GPU_MEMORY_UTILIZATION = 0.9  # Fraction of GPU memory to use
 
 # Generation parameters
 TEMPERATURE = 0.7
@@ -46,10 +55,8 @@ NUM_INITIAL_ROLLOUTS = 1  # Number of initial rollouts per prompt (typically 1)
 N_INITIAL_ROLLOUT_TESTS = 10  # Number of initial rollouts to generate and test before selecting one
 INITIAL_ROLLOUT_SELECTION_STRATEGY = "MIN"  # Strategy for selecting from N_INITIAL_ROLLOUT_TESTS: "MIN" or "MEDIAN"
 
-# Parallelization
-MAX_WORKERS = 120 # Number of parallel API requests for rollout generation
-                  # Increase if your API server can handle more concurrent requests
-                  # Typical vLLM can handle 10-50 concurrent requests depending on GPU memory
+# Parallelization (no longer used - vLLM handles batching internally)
+# MAX_WORKERS removed - we use batched generation instead
 
 # Processing options
 PROCESS_ALL_PROMPTS = True  # If False, will process only the first prompt
@@ -69,7 +76,6 @@ def main():
     print(f"\nConfiguration:")
     print(f"  Prompts file: {PROMPTS_FILE}")
     print(f"  Output directory: {OUTPUT_DIR}")
-    print(f"  API URL: {API_URL}")
     print(f"  Model: {MODEL}")
     print(f"  Temperature: {TEMPERATURE}")
     print(f"  Max tokens: {MAX_TOKENS}")
@@ -77,21 +83,36 @@ def main():
     print(f"  Initial rollouts per prompt: {NUM_INITIAL_ROLLOUTS}")
     print(f"  Initial rollout tests: {N_INITIAL_ROLLOUT_TESTS}")
     print(f"  Initial rollout selection: {INITIAL_ROLLOUT_SELECTION_STRATEGY}")
-    print(f"  Max parallel workers: {MAX_WORKERS}")
+    print(f"  Tensor parallel size: {TENSOR_PARALLEL_SIZE}")
+    print(f"  GPU memory utilization: {GPU_MEMORY_UTILIZATION}")
     print(f"  Skip if exists: {SKIP_IF_EXISTS}")
     print()
     
-    # Initialize generator
+    # Initialize vLLM engine ONCE at startup
+    print("Initializing vLLM engine...")
+    print("  This may take a minute to load the model...")
+    llm = LLM(
+        model=MODEL,
+        tensor_parallel_size=TENSOR_PARALLEL_SIZE,
+        gpu_memory_utilization=GPU_MEMORY_UTILIZATION
+    )
+    sampling_params = SamplingParams(
+        temperature=TEMPERATURE,
+        max_tokens=MAX_TOKENS
+    )
+    print("  ✓ vLLM engine initialized\n")
+    
+    # Initialize generator (no longer needs API URL or workers)
     generator = RolloutGenerator(
-        api_url=API_URL, 
-        model=MODEL, 
-        max_workers=MAX_WORKERS,
+        model=MODEL,
         n_initial_rollout_tests=N_INITIAL_ROLLOUT_TESTS,
         initial_rollout_selection_strategy=INITIAL_ROLLOUT_SELECTION_STRATEGY
     )
     generator.temperature = TEMPERATURE
     generator.max_tokens = MAX_TOKENS
     generator.num_counterfactuals = NUM_COUNTERFACTUALS
+    generator.llm = llm  # Pass the LLM engine
+    generator.sampling_params = sampling_params  # Pass sampling params
     
     # Load prompts
     import json
@@ -145,7 +166,7 @@ def main():
                 if NUM_INITIAL_ROLLOUTS > 1 and not HAS_TQDM:
                     print(f"\nInitial rollout {rollout_idx + 1}/{NUM_INITIAL_ROLLOUTS}")
                 
-                sentence_data_list = generator.process_prompt(
+                sentence_data_list = generator.process_prompt_offline(
                     prompt_data, 
                     output_dir=OUTPUT_DIR,
                     skip_if_exists=SKIP_IF_EXISTS,
