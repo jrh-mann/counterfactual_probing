@@ -51,9 +51,10 @@ MAX_TOKENS = 32000
 
 # Experiment parameters
 NUM_COUNTERFACTUALS = 50  # Number of rollouts per sentence
-NUM_INITIAL_ROLLOUTS = 4 # Number of initial rollouts per prompt (typically 1)
-N_INITIAL_ROLLOUT_TESTS = 3  # Number of initial rollouts to generate and test before selecting one
-INITIAL_ROLLOUT_SELECTION_STRATEGY = "MIN"  # Strategy for selecting from N_INITIAL_ROLLOUT_TESTS: "MIN" or "MEDIAN"
+NUM_INITIAL_ROLLOUTS = 20 # Number of initial rollouts per prompt (typically 1)
+N_INITIAL_ROLLOUT_TESTS = 1  # Number of initial rollouts to generate and test before selecting one
+INITIAL_ROLLOUT_SELECTION_STRATEGY = "MEDIAN"  # Strategy for selecting from N_INITIAL_ROLLOUT_TESTS: "MIN" or "MEDIAN"
+NUM_SENTENCES_TO_SAMPLE = 20  # Number of evenly-spaced sentences to process (None = process all sentences)
 
 # Parallelization (no longer used - vLLM handles batching internally)
 # MAX_WORKERS removed - we use batched generation instead
@@ -83,6 +84,7 @@ def main():
     print(f"  Initial rollouts per prompt: {NUM_INITIAL_ROLLOUTS}")
     print(f"  Initial rollout tests: {N_INITIAL_ROLLOUT_TESTS}")
     print(f"  Initial rollout selection: {INITIAL_ROLLOUT_SELECTION_STRATEGY}")
+    print(f"  Sentences to sample: {NUM_SENTENCES_TO_SAMPLE if NUM_SENTENCES_TO_SAMPLE is not None else 'all'}")
     print(f"  Tensor parallel size: {TENSOR_PARALLEL_SIZE}")
     print(f"  GPU memory utilization: {GPU_MEMORY_UTILIZATION}")
     print(f"  Skip if exists: {SKIP_IF_EXISTS}")
@@ -102,17 +104,33 @@ def main():
     )
     print("  ✓ vLLM engine initialized\n")
     
+    # Cache tokenizer once
+    print("Caching tokenizer...")
+    tokenizer = None
+    try:
+        tokenizer = getattr(llm, 'llm_engine', None)
+        if tokenizer:
+            tokenizer = getattr(tokenizer, 'tokenizer', None)
+    except:
+        pass
+    if tokenizer:
+        print("  ✓ Tokenizer cached\n")
+    else:
+        print("  ⚠ Tokenizer not found, will use fallback formatting\n")
+    
     # Initialize generator (no longer needs API URL or workers)
     generator = RolloutGenerator(
         model=MODEL,
         n_initial_rollout_tests=N_INITIAL_ROLLOUT_TESTS,
-        initial_rollout_selection_strategy=INITIAL_ROLLOUT_SELECTION_STRATEGY
+        initial_rollout_selection_strategy=INITIAL_ROLLOUT_SELECTION_STRATEGY,
+        num_sentences_to_sample=NUM_SENTENCES_TO_SAMPLE
     )
     generator.temperature = TEMPERATURE
     generator.max_tokens = MAX_TOKENS
     generator.num_counterfactuals = NUM_COUNTERFACTUALS
     generator.llm = llm  # Pass the LLM engine
     generator.sampling_params = sampling_params  # Pass sampling params
+    generator.tokenizer = tokenizer  # Cache tokenizer
     
     # Load prompts
     import json
@@ -137,70 +155,136 @@ def main():
     print(f"Processing {len(prompts_to_process)} prompt(s)\n")
     print("=" * 70)
     
-    # Process each prompt
-    results = []
     experiment_start = time.time()
+    results = []
     
-    for idx, prompt_data in enumerate(prompts_to_process):
-        prompt_name = prompt_data.get("name", f"prompt_{idx}")
-        prompt_start = time.time()
-        
-        # Create a progress bar for this specific prompt that tracks sentences
+    try:
+        # Phase 1: Prepare and generate ALL initial rollouts
         if HAS_TQDM:
-            # Create a progress bar that will track sentences within this prompt
-            prompt_pbar = tqdm(
-                total=1,  # Will be updated when we know the sentence count
-                desc=f"Prompt {idx+1}/{len(prompts_to_process)}: {prompt_name[:40]}",
-                unit="sentence",
-                leave=True,  # Keep the bar visible after completion
-                position=0
-            )
-        else:
-            prompt_pbar = None
-            print(f"\n[{idx + 1}/{len(prompts_to_process)}] Processing: {prompt_name}")
-            print("-" * 70)
+            print("\n" + "=" * 70)
+        all_initial_prompts, initial_metadata, prompt_info_list = generator.prepare_all_initial_rollouts(
+            prompts_to_process,
+            OUTPUT_DIR,
+            SKIP_IF_EXISTS,
+            NUM_INITIAL_ROLLOUTS
+        )
         
-        try:
-            # Generate initial rollout(s) if needed (currently always 1)
-            for rollout_idx in range(NUM_INITIAL_ROLLOUTS):
-                if NUM_INITIAL_ROLLOUTS > 1 and not HAS_TQDM:
-                    print(f"\nInitial rollout {rollout_idx + 1}/{NUM_INITIAL_ROLLOUTS}")
-                
-                sentence_data_list = generator.process_prompt_offline(
-                    prompt_data, 
-                    output_dir=OUTPUT_DIR,
-                    skip_if_exists=SKIP_IF_EXISTS,
-                    prompt_pbar=prompt_pbar,
-                    rollout_idx=rollout_idx
-                )
-                
-                if sentence_data_list:
-                    results.append({
-                        "prompt_name": prompt_name,
-                        "rollout_index": rollout_idx,
-                        "num_sentences": len(sentence_data_list),
-                        "sentence_data": sentence_data_list
-                    })
-                    
-                    prompt_time = time.time() - prompt_start
-                    
-                    # Close the progress bar for this prompt
-                    if prompt_pbar:
-                        prompt_pbar.close()
-                else:
-                    if prompt_pbar:
-                        prompt_pbar.close()
-                    if not HAS_TQDM:
-                        print(f"\n✗ Failed to process: {prompt_name}")
-        
-        except Exception as e:
-            if prompt_pbar:
-                prompt_pbar.close()
+        if all_initial_prompts:
+            if HAS_TQDM:
+                pbar_gen = tqdm(total=len(all_initial_prompts), desc="Phase 1: Generating initial rollouts", unit="request")
+            else:
+                pbar_gen = None
+                print(f"\nPhase 1: Generating {len(all_initial_prompts)} initial rollouts...")
+            
+            try:
+                initial_outputs = generator.llm.generate(all_initial_prompts, generator.sampling_params)
+            except Exception as e:
+                print(f"\n✗ Error generating initial rollouts: {e}")
+                import traceback
+                traceback.print_exc()
+                return 1
+            
+            if pbar_gen:
+                pbar_gen.close()
             if not HAS_TQDM:
-                print(f"\n✗ Error processing {prompt_name}: {e}")
+                print(f"  ✓ Generated {len(initial_outputs)} initial rollouts")
+        else:
+            initial_outputs = []
+            if not HAS_TQDM:
+                print("\nNo initial rollouts to generate (all prompts already processed)")
+        
+        # Phase 2: Process and select best rollouts
+        if HAS_TQDM:
+            print("\n" + "=" * 70)
+        try:
+            processed_prompts = generator.process_initial_rollouts(
+                initial_outputs,
+                initial_metadata,
+                prompt_info_list,
+                NUM_INITIAL_ROLLOUTS
+            )
+        except Exception as e:
+            print(f"\n✗ Error processing initial rollouts: {e}")
             import traceback
             traceback.print_exc()
-            continue
+            return 1
+        
+        if not processed_prompts:
+            print("\nNo prompts to process after initial rollout selection")
+            return 0
+        
+        # Save checkpoint of initial rollouts for recovery
+        try:
+            generator.save_initial_rollouts_checkpoint(processed_prompts, OUTPUT_DIR)
+        except Exception as e:
+            print(f"  ⚠ Warning: Could not save checkpoint: {e}")
+        
+        # Phase 3: Prepare ALL counterfactual prompts (with resume support)
+        if HAS_TQDM:
+            print("\n" + "=" * 70)
+        all_counterfactual_prompts, counterfactual_metadata = generator.prepare_all_counterfactuals(
+            processed_prompts,
+            output_dir=OUTPUT_DIR,
+            skip_completed=SKIP_IF_EXISTS
+        )
+        
+        # Phase 4: Generate ALL counterfactuals
+        if all_counterfactual_prompts:
+            if HAS_TQDM:
+                pbar_cf = tqdm(total=len(all_counterfactual_prompts), desc="Phase 4: Generating counterfactuals", unit="request")
+            else:
+                pbar_cf = None
+                print(f"\nPhase 4: Generating {len(all_counterfactual_prompts)} counterfactuals...")
+            
+            try:
+                counterfactual_outputs = generator.llm.generate(all_counterfactual_prompts, generator.sampling_params)
+            except Exception as e:
+                print(f"\n✗ Error generating counterfactuals: {e}")
+                import traceback
+                traceback.print_exc()
+                print("\n⚠ Partial results may have been saved. You can resume by running again.")
+                return 1
+            
+            if pbar_cf:
+                pbar_cf.close()
+            if not HAS_TQDM:
+                print(f"  ✓ Generated {len(counterfactual_outputs)} counterfactuals")
+        else:
+            counterfactual_outputs = []
+            if not HAS_TQDM:
+                print("\nNo counterfactuals to generate (all already completed)")
+        
+        # Phase 5: Process and save all results (with progressive saving)
+        if HAS_TQDM:
+            print("\n" + "=" * 70)
+        try:
+            results_dict = generator.process_all_counterfactuals(
+                counterfactual_outputs,
+                counterfactual_metadata,
+                processed_prompts,
+                output_dir=OUTPUT_DIR,
+                save_progressively=True
+            )
+        except Exception as e:
+            print(f"\n✗ Error processing counterfactuals: {e}")
+            import traceback
+            traceback.print_exc()
+            print("\n⚠ Some results may have been saved. You can resume by running again.")
+            return 1
+        
+        # Phase 6: Verify all results are saved (progressive saving already did most of the work)
+        results = generator.save_all_results(
+            results_dict,
+            processed_prompts,
+            OUTPUT_DIR,
+            force_resave=False
+        )
+        
+    except Exception as e:
+        print(f"\n✗ Error in batch processing: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
     
     # Final summary
     total_time = time.time() - experiment_start
