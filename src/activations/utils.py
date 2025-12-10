@@ -76,8 +76,8 @@ def reconstruct_sequence_messages(sentence_data_list: List[Dict[str, Any]], sent
         if sentence_index < 0 or sentence_index >= len(sentence_data_list):
             raise ValueError(f"sentence_index {sentence_index} out of range [0, {len(sentence_data_list)})")
         
-        sentences = [s["sentence"] for s in sentence_data_list[:sentence_index + 1]]
-        target_pos_in_filtered = sentence_index
+    sentences = [s["sentence"] for s in sentence_data_list[:sentence_index + 1]]
+    target_pos_in_filtered = sentence_index
     
     # Concatenate sentences to form assistant response
     assistant_content = get_sentence_prefix(sentences, target_pos_in_filtered)
