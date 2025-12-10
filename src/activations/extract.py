@@ -72,10 +72,20 @@ def store_activations(
     logger.info(f"Activations will be saved to: {activations_dir}")
     
     # Determine range to process
+    # Note: start_idx and end_idx refer to positions in sentence_data_list, not sentence_index values
+    # This is important when using selected sentences format
     end_idx = end_idx if end_idx is not None else len(sentence_data_list)
     sentences_to_process = sentence_data_list[start_idx:end_idx]
     
-    logger.info(f"Processing {len(sentences_to_process)} sentences (indices {start_idx} to {end_idx})")
+    # Check if we're using selected sentences format
+    has_sentence_index_field = all("sentence_index" in s for s in sentence_data_list)
+    if has_sentence_index_field:
+        # Get the actual sentence indices that will be processed
+        sentence_indices = [s.get("sentence_index") for s in sentences_to_process]
+        logger.info(f"Processing {len(sentences_to_process)} sentences (list positions {start_idx} to {end_idx-1})")
+        logger.info(f"  Sentence indices: {sentence_indices}")
+    else:
+        logger.info(f"Processing {len(sentences_to_process)} sentences (indices {start_idx} to {end_idx-1})")
     
     # Parse token_position
     if token_position == "final":

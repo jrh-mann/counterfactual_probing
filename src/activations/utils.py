@@ -17,18 +17,20 @@ def reconstruct_sequence_messages(sentence_data_list: List[Dict[str, Any]], sent
     """
     Reconstruct chat messages up to a given sentence index.
     
+    This function handles both sequential and selected sentence formats:
+    - Sequential: sentence_data_list contains all sentences in order (0, 1, 2, ...)
+    - Selected: sentence_data_list only contains selected sentences (e.g., [0, 5, 11, 16, ...])
+                 Each entry has a 'sentence_index' field indicating its position in the original rollout.
+    
     Args:
         sentence_data_list: List of sentence data dictionaries from rollout JSON
-        sentence_index: Index of the sentence to include (0-based)
+        sentence_index: Index of the sentence to include (0-based, refers to original sentence position)
     
     Returns:
         List of chat messages: [user_prompt, assistant_response_up_to_index]
     """
     if not sentence_data_list:
         raise ValueError("sentence_data_list cannot be empty")
-    
-    if sentence_index < 0 or sentence_index >= len(sentence_data_list):
-        raise ValueError(f"sentence_index {sentence_index} out of range [0, {len(sentence_data_list)})")
     
     # Get the formatted prompt from the first sentence (should be same for all)
     first_sentence = sentence_data_list[0]
@@ -37,11 +39,48 @@ def reconstruct_sequence_messages(sentence_data_list: List[Dict[str, Any]], sent
     if not formatted_prompt:
         raise ValueError("formatted_prompt not found in sentence data")
     
-    # Extract sentences up to and including sentence_index
-    sentences = [s["sentence"] for s in sentence_data_list[:sentence_index + 1]]
+    # Check if we're using selected sentences format (each entry has sentence_index field)
+    # vs sequential format (indices match list positions)
+    has_sentence_index_field = all("sentence_index" in s for s in sentence_data_list)
+    
+    if has_sentence_index_field:
+        # Selected sentences format: filter by sentence_index field
+        # Get all sentences where sentence_index <= target sentence_index
+        relevant_sentences = [
+            s for s in sentence_data_list 
+            if s.get("sentence_index", -1) <= sentence_index
+        ]
+        
+        # Sort by sentence_index to ensure correct order
+        relevant_sentences.sort(key=lambda s: s.get("sentence_index", -1))
+        
+        # Verify the target sentence exists
+        target_sentence = next(
+            (s for s in relevant_sentences if s.get("sentence_index") == sentence_index),
+            None
+        )
+        if target_sentence is None:
+            raise ValueError(
+                f"sentence_index {sentence_index} not found in sentence_data_list. "
+                f"Available indices: {[s.get('sentence_index') for s in sentence_data_list]}"
+            )
+        
+        # Extract sentences in order
+        sentences = [s["sentence"] for s in relevant_sentences]
+        
+        # Find the position of target sentence in the filtered list
+        target_pos_in_filtered = len(relevant_sentences) - 1  # It's the last one by construction
+        
+    else:
+        # Sequential format: use list indices directly
+        if sentence_index < 0 or sentence_index >= len(sentence_data_list):
+            raise ValueError(f"sentence_index {sentence_index} out of range [0, {len(sentence_data_list)})")
+        
+        sentences = [s["sentence"] for s in sentence_data_list[:sentence_index + 1]]
+        target_pos_in_filtered = sentence_index
     
     # Concatenate sentences to form assistant response
-    assistant_content = get_sentence_prefix(sentences, sentence_index)
+    assistant_content = get_sentence_prefix(sentences, target_pos_in_filtered)
     
     # Construct messages: [user_prompt, assistant_response]
     messages = formatted_prompt.copy()  # Start with user prompt
