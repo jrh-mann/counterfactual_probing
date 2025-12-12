@@ -52,11 +52,11 @@ TEMPERATURE = 0.7
 MAX_TOKENS = 8000  # Reduced from 32000 for better memory efficiency (most completions don't need 32K)
 
 # Experiment parameters
-NUM_COUNTERFACTUALS = 20  # Number of rollouts per sentence
-NUM_INITIAL_ROLLOUTS = 2 # Number of initial rollouts per prompt (typically 1)
+NUM_COUNTERFACTUALS = 50  # Number of rollouts per sentence
+NUM_INITIAL_ROLLOUTS = 5 # Number of initial rollouts per prompt (typically 1)
 N_INITIAL_ROLLOUT_TESTS = 1  # Number of initial rollouts to generate and test before selecting one
 INITIAL_ROLLOUT_SELECTION_STRATEGY = "MEDIAN"  # Strategy for selecting from N_INITIAL_ROLLOUT_TESTS: "MIN" or "MEDIAN"
-NUM_SENTENCES_TO_SAMPLE = 10  # Number of evenly-spaced sentences to process (None = process all sentences)
+NUM_SENTENCES_TO_SAMPLE = 20  # Number of evenly-spaced sentences to process (None = process all sentences)
 
 # Batching configuration
 COUNTERFACTUAL_BATCH_SIZE = 3000  # Process counterfactuals in batches to avoid memory pressure
@@ -243,32 +243,46 @@ def main():
             skip_completed=SKIP_IF_EXISTS
         )
         
-        # Phase 4: Generate counterfactuals in batches
+        # Phase 4: Generate counterfactuals in prompt-aligned batches
         if all_counterfactual_prompts:
             total_prompts = len(all_counterfactual_prompts)
-            num_batches = (total_prompts + COUNTERFACTUAL_BATCH_SIZE - 1) // COUNTERFACTUAL_BATCH_SIZE
+            
+            # Find prompt boundaries for prompt-aligned batching
+            batch_boundaries = [0]
+            if counterfactual_metadata:
+                current_prompt_idx = counterfactual_metadata[0][0]
+                for i, (prompt_idx, _, _) in enumerate(counterfactual_metadata[1:], start=1):
+                    if prompt_idx != current_prompt_idx:
+                        batch_boundaries.append(i)
+                        current_prompt_idx = prompt_idx
+            batch_boundaries.append(total_prompts)
+            
+            num_batches = len(batch_boundaries) - 1
             
             if HAS_TQDM:
                 pbar_cf = tqdm(total=total_prompts, desc="Phase 4: Generating counterfactuals", unit="request")
             else:
                 pbar_cf = None
-                print(f"\nPhase 4: Generating {total_prompts} counterfactuals in {num_batches} batches of ~{COUNTERFACTUAL_BATCH_SIZE}...")
+                print(f"\nPhase 4: Generating {total_prompts} counterfactuals in {num_batches} prompt-aligned batches...")
             
             all_counterfactual_outputs = []
             
             try:
                 for batch_idx in range(num_batches):
-                    start_idx = batch_idx * COUNTERFACTUAL_BATCH_SIZE
-                    end_idx = min(start_idx + COUNTERFACTUAL_BATCH_SIZE, total_prompts)
+                    start_idx = batch_boundaries[batch_idx]
+                    end_idx = batch_boundaries[batch_idx + 1]
                     batch_prompts = all_counterfactual_prompts[start_idx:end_idx]
                     batch_metadata = counterfactual_metadata[start_idx:end_idx]
                     
+                    # Get prompt info for logging
+                    batch_prompt_idx = batch_metadata[0][0] if batch_metadata else None
+                    batch_size = len(batch_prompts)
+                    
                     if not HAS_TQDM:
-                        print(f"  Batch {batch_idx + 1}/{num_batches}: Processing {len(batch_prompts)} prompts...")
+                        print(f"  Batch {batch_idx + 1}/{num_batches}: Processing {batch_size} prompts (prompt {batch_prompt_idx})...")
                     
                     # Generate this batch
                     batch_outputs = generator.llm.generate(batch_prompts, generator.counterfactual_sampling_params)
-                    batch_size = len(batch_outputs)
                     all_counterfactual_outputs.extend(batch_outputs)
                     
                     # Cleanup between batches to reduce memory fragmentation
