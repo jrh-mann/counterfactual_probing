@@ -43,7 +43,8 @@ class RolloutGenerator:
         self.initial_rollout_selection_strategy = initial_rollout_selection_strategy.upper()  # MIN or MEDIAN
         self.num_sentences_to_sample = num_sentences_to_sample  # Number of evenly-spaced sentences to process (None = all)
         self.llm = None  # Will be set from run_experiment.py
-        self.sampling_params = None  # Will be set from run_experiment.py
+        self.sampling_params = None  # Will be set from run_experiment.py (for initial rollouts)
+        self.counterfactual_sampling_params = None  # Will be set from run_experiment.py (for counterfactuals with n=)
         self.tokenizer = None  # Will be set from run_experiment.py (cached tokenizer)
     
     def load_prompts(self, prompts_path: str) -> List[Dict[str, str]]:
@@ -558,7 +559,7 @@ class RolloutGenerator:
                 for sent_idx in selected_indices:
                     # Skip if already completed
                     if (prompt_idx, rollout_idx, sent_idx) in completed_sentences:
-                        skipped_count += self.num_counterfactuals
+                        skipped_count += 1  # Count unique prompts skipped (not completions)
                         continue
                     
                     prefix = get_sentence_prefix(sentences, sent_idx)
@@ -568,7 +569,7 @@ class RolloutGenerator:
                     counterfactual_messages.append({"role": "assistant", "content": prefix})
                     counterfactual_prompt = messages_to_prompt_string(counterfactual_messages, tokenizer=self.tokenizer)
                     
-                    # Add num_counterfactuals copies
+                    # Add num_counterfactuals copies (duplicate prompts for better batching)
                     for _ in range(self.num_counterfactuals):
                         all_prompts.append(counterfactual_prompt)
                         metadata_map.append((prompt_idx, rollout_idx, sent_idx))
@@ -657,13 +658,17 @@ class RolloutGenerator:
             Dict[prompt_idx][rollout_idx] = List[sentence_data]
         """
         # Group outputs by (prompt_idx, rollout_idx, sentence_idx)
+        # Each output contains one completion (prompts are duplicated instead of using n=)
         rollouts_by_key = defaultdict(list)
         
         for i, output in enumerate(all_outputs):
             if i < len(metadata_map):
                 prompt_idx, rollout_idx, sentence_idx = metadata_map[i]
+                # output.outputs is a list with one completion (since we duplicate prompts)
                 if output.outputs and len(output.outputs) > 0:
-                    text = output.outputs[0].text
+                    # Get the single completion from this output
+                    completion = output.outputs[0]
+                    text = completion.text
                     if text:
                         rollouts_by_key[(prompt_idx, rollout_idx, sentence_idx)].append(text)
         

@@ -9,6 +9,8 @@ Configure parameters at the top of this file, then run:
 import sys
 from pathlib import Path
 import time
+import gc
+import torch
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -43,18 +45,21 @@ OUTPUT_DIR = "src/rollouts"
 # Model configuration
 MODEL = "openai/gpt-oss-20b"
 TENSOR_PARALLEL_SIZE = 1  # Number of GPUs to use for tensor parallelism
-GPU_MEMORY_UTILIZATION = 0.9  # Fraction of GPU memory to use
+GPU_MEMORY_UTILIZATION = 0.9  # Fraction of GPU memory to use (reduced to leave headroom for better batching)
 
 # Generation parameters
 TEMPERATURE = 0.7
-MAX_TOKENS = 32000
+MAX_TOKENS = 8000  # Reduced from 32000 for better memory efficiency (most completions don't need 32K)
 
 # Experiment parameters
-NUM_COUNTERFACTUALS = 50  # Number of rollouts per sentence
-NUM_INITIAL_ROLLOUTS = 20 # Number of initial rollouts per prompt (typically 1)
+NUM_COUNTERFACTUALS = 20  # Number of rollouts per sentence
+NUM_INITIAL_ROLLOUTS = 2 # Number of initial rollouts per prompt (typically 1)
 N_INITIAL_ROLLOUT_TESTS = 1  # Number of initial rollouts to generate and test before selecting one
 INITIAL_ROLLOUT_SELECTION_STRATEGY = "MEDIAN"  # Strategy for selecting from N_INITIAL_ROLLOUT_TESTS: "MIN" or "MEDIAN"
-NUM_SENTENCES_TO_SAMPLE = 20  # Number of evenly-spaced sentences to process (None = process all sentences)
+NUM_SENTENCES_TO_SAMPLE = 10  # Number of evenly-spaced sentences to process (None = process all sentences)
+
+# Batching configuration
+COUNTERFACTUAL_BATCH_SIZE = 3000  # Process counterfactuals in batches to avoid memory pressure
 
 # Parallelization (no longer used - vLLM handles batching internally)
 # MAX_WORKERS removed - we use batched generation instead
@@ -96,9 +101,18 @@ def main():
     llm = LLM(
         model=MODEL,
         tensor_parallel_size=TENSOR_PARALLEL_SIZE,
-        gpu_memory_utilization=GPU_MEMORY_UTILIZATION
+        gpu_memory_utilization=GPU_MEMORY_UTILIZATION,
+        enable_prefix_caching=True,  # Enable prefix caching for shared prompt prefixes
+        max_num_seqs=1024,  # Increase from default 256 - allows more concurrent sequences
+        max_num_batched_tokens=32768,  # Increase from default 8192 - allows larger batches
     )
     sampling_params = SamplingParams(
+        temperature=TEMPERATURE,
+        max_tokens=MAX_TOKENS
+    )
+    # For counterfactual generation - use same params as initial rollouts
+    # (We duplicate prompts instead of using n= parameter for better batching)
+    counterfactual_sampling_params = SamplingParams(
         temperature=TEMPERATURE,
         max_tokens=MAX_TOKENS
     )
@@ -129,7 +143,8 @@ def main():
     generator.max_tokens = MAX_TOKENS
     generator.num_counterfactuals = NUM_COUNTERFACTUALS
     generator.llm = llm  # Pass the LLM engine
-    generator.sampling_params = sampling_params  # Pass sampling params
+    generator.sampling_params = sampling_params  # Pass sampling params for initial rollouts
+    generator.counterfactual_sampling_params = counterfactual_sampling_params  # Pass sampling params for counterfactuals
     generator.tokenizer = tokenizer  # Cache tokenizer
     
     # Load prompts
@@ -228,16 +243,48 @@ def main():
             skip_completed=SKIP_IF_EXISTS
         )
         
-        # Phase 4: Generate ALL counterfactuals
+        # Phase 4: Generate counterfactuals in batches
         if all_counterfactual_prompts:
+            total_prompts = len(all_counterfactual_prompts)
+            num_batches = (total_prompts + COUNTERFACTUAL_BATCH_SIZE - 1) // COUNTERFACTUAL_BATCH_SIZE
+            
             if HAS_TQDM:
-                pbar_cf = tqdm(total=len(all_counterfactual_prompts), desc="Phase 4: Generating counterfactuals", unit="request")
+                pbar_cf = tqdm(total=total_prompts, desc="Phase 4: Generating counterfactuals", unit="request")
             else:
                 pbar_cf = None
-                print(f"\nPhase 4: Generating {len(all_counterfactual_prompts)} counterfactuals...")
+                print(f"\nPhase 4: Generating {total_prompts} counterfactuals in {num_batches} batches of ~{COUNTERFACTUAL_BATCH_SIZE}...")
+            
+            all_counterfactual_outputs = []
             
             try:
-                counterfactual_outputs = generator.llm.generate(all_counterfactual_prompts, generator.sampling_params)
+                for batch_idx in range(num_batches):
+                    start_idx = batch_idx * COUNTERFACTUAL_BATCH_SIZE
+                    end_idx = min(start_idx + COUNTERFACTUAL_BATCH_SIZE, total_prompts)
+                    batch_prompts = all_counterfactual_prompts[start_idx:end_idx]
+                    batch_metadata = counterfactual_metadata[start_idx:end_idx]
+                    
+                    if not HAS_TQDM:
+                        print(f"  Batch {batch_idx + 1}/{num_batches}: Processing {len(batch_prompts)} prompts...")
+                    
+                    # Generate this batch
+                    batch_outputs = generator.llm.generate(batch_prompts, generator.counterfactual_sampling_params)
+                    batch_size = len(batch_outputs)
+                    all_counterfactual_outputs.extend(batch_outputs)
+                    
+                    # Cleanup between batches to reduce memory fragmentation
+                    # This helps prevent slowdown in subsequent batches
+                    del batch_outputs
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    
+                    if pbar_cf:
+                        pbar_cf.update(batch_size)
+                    
+                    if not HAS_TQDM:
+                        print(f"    ✓ Generated {batch_size} completions")
+                
+                counterfactual_outputs = all_counterfactual_outputs
+                
             except Exception as e:
                 print(f"\n✗ Error generating counterfactuals: {e}")
                 import traceback
@@ -248,7 +295,7 @@ def main():
             if pbar_cf:
                 pbar_cf.close()
             if not HAS_TQDM:
-                print(f"  ✓ Generated {len(counterfactual_outputs)} counterfactuals")
+                print(f"  ✓ Generated {len(counterfactual_outputs)} counterfactuals total")
         else:
             counterfactual_outputs = []
             if not HAS_TQDM:

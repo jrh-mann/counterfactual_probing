@@ -9,3 +9,5 @@ scipy
 scikit-learn
 plotly
 seaborn
+ipykernel
+nbformat
