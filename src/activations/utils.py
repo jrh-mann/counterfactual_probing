@@ -4,7 +4,7 @@ Utilities for reconstructing sequences and formatting for activation extraction.
 
 import sys
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from transformers import PreTrainedTokenizer
 
 # Add src directory to path to import from utils
@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.text_utils import get_sentence_prefix
 
 
-def reconstruct_sequence_messages(sentence_data_list: List[Dict[str, Any]], sentence_index: int) -> List[Dict[str, str]]:
+def reconstruct_sequence_messages(sentence_data_list: List[Dict[str, Any]], sentence_index: int, 
+                                  full_rollout_text: Optional[str] = None) -> List[Dict[str, str]]:
     """
     Reconstruct chat messages up to a given sentence index.
     
@@ -25,6 +26,7 @@ def reconstruct_sequence_messages(sentence_data_list: List[Dict[str, Any]], sent
     Args:
         sentence_data_list: List of sentence data dictionaries from rollout JSON
         sentence_index: Index of the sentence to include (0-based, refers to original sentence position)
+        full_rollout_text: Optional full rollout text for accurate reconstruction (new format)
     
     Returns:
         List of chat messages: [user_prompt, assistant_response_up_to_index]
@@ -39,45 +41,73 @@ def reconstruct_sequence_messages(sentence_data_list: List[Dict[str, Any]], sent
     if not formatted_prompt:
         raise ValueError("formatted_prompt not found in sentence data")
     
-    # Check if we're using selected sentences format (each entry has sentence_index field)
-    # vs sequential format (indices match list positions)
-    has_sentence_index_field = all("sentence_index" in s for s in sentence_data_list)
-    
-    if has_sentence_index_field:
-        # Selected sentences format: filter by sentence_index field
-        # Get all sentences where sentence_index <= target sentence_index
-        relevant_sentences = [
-            s for s in sentence_data_list 
-            if s.get("sentence_index", -1) <= sentence_index
-        ]
+    # If full_rollout_text is available, use it for accurate reconstruction
+    if full_rollout_text is not None:
+        # Import here to avoid circular imports
+        from utils.text_utils import split_sentences
         
-        # Sort by sentence_index to ensure correct order
-        relevant_sentences.sort(key=lambda s: s.get("sentence_index", -1))
+        # Split full rollout into all sentences
+        all_sentences = split_sentences(full_rollout_text)
         
-        # Verify the target sentence exists
-        target_sentence = next(
-            (s for s in relevant_sentences if s.get("sentence_index") == sentence_index),
-            None
-        )
-        if target_sentence is None:
+        # Verify sentence_index is valid
+        if sentence_index < 0 or sentence_index >= len(all_sentences):
             raise ValueError(
-                f"sentence_index {sentence_index} not found in sentence_data_list. "
-                f"Available indices: {[s.get('sentence_index') for s in sentence_data_list]}"
+                f"sentence_index {sentence_index} out of range [0, {len(all_sentences)}) "
+                f"for full rollout with {len(all_sentences)} sentences"
             )
         
-        # Extract sentences in order
-        sentences = [s["sentence"] for s in relevant_sentences]
-        
-        # Find the position of target sentence in the filtered list
-        target_pos_in_filtered = len(relevant_sentences) - 1  # It's the last one by construction
-        
+        # Get prefix up to and including target sentence
+        sentences = all_sentences[:sentence_index + 1]
+        target_pos_in_filtered = sentence_index
+    
     else:
-        # Sequential format: use list indices directly
-        if sentence_index < 0 or sentence_index >= len(sentence_data_list):
-            raise ValueError(f"sentence_index {sentence_index} out of range [0, {len(sentence_data_list)})")
+        # Fall back to old behavior (may have gaps in selected sentences format)
+        import warnings
+        warnings.warn(
+            "full_rollout_text not available. Reconstructing from stored sentences only. "
+            "This may have gaps if using selected sentences format.",
+            UserWarning
+        )
         
-    sentences = [s["sentence"] for s in sentence_data_list[:sentence_index + 1]]
-    target_pos_in_filtered = sentence_index
+        # Check if we're using selected sentences format (each entry has sentence_index field)
+        # vs sequential format (indices match list positions)
+        has_sentence_index_field = all("sentence_index" in s for s in sentence_data_list)
+        
+        if has_sentence_index_field:
+            # Selected sentences format: filter by sentence_index field
+            # Get all sentences where sentence_index <= target sentence_index
+            relevant_sentences = [
+                s for s in sentence_data_list 
+                if s.get("sentence_index", -1) <= sentence_index
+            ]
+            
+            # Sort by sentence_index to ensure correct order
+            relevant_sentences.sort(key=lambda s: s.get("sentence_index", -1))
+            
+            # Verify the target sentence exists
+            target_sentence = next(
+                (s for s in relevant_sentences if s.get("sentence_index") == sentence_index),
+                None
+            )
+            if target_sentence is None:
+                raise ValueError(
+                    f"sentence_index {sentence_index} not found in sentence_data_list. "
+                    f"Available indices: {[s.get('sentence_index') for s in sentence_data_list]}"
+                )
+            
+            # Extract sentences in order
+            sentences = [s["sentence"] for s in relevant_sentences]
+            
+            # Find the position of target sentence in the filtered list
+            target_pos_in_filtered = len(relevant_sentences) - 1  # It's the last one by construction
+            
+        else:
+            # Sequential format: use list indices directly
+            if sentence_index < 0 or sentence_index >= len(sentence_data_list):
+                raise ValueError(f"sentence_index {sentence_index} out of range [0, {len(sentence_data_list)})")
+            
+            sentences = [s["sentence"] for s in sentence_data_list[:sentence_index + 1]]
+            target_pos_in_filtered = sentence_index
     
     # Concatenate sentences to form assistant response
     assistant_content = get_sentence_prefix(sentences, target_pos_in_filtered)
@@ -106,7 +136,7 @@ def format_with_chat_template(messages: List[Dict[str, str]], tokenizer: PreTrai
     chat_formatted = tokenizer.apply_chat_template(
         messages,  # type: ignore[arg-type]
         tokenize=False,
-        add_generation_prompt=False
+        add_generation_prompt=True  # Match generation format
     )
     
     if not isinstance(chat_formatted, str):

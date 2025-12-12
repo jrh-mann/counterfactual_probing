@@ -22,6 +22,30 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def find_last_content_token_position(token_ids: torch.Tensor, tokenizer: PreTrainedTokenizer) -> int:
+    """
+    Find the last non-special token position by walking backwards from the end.
+    
+    Args:
+        token_ids: Tensor of token IDs
+        tokenizer: Tokenizer to identify special tokens
+    
+    Returns:
+        Index of the last content token (fallback to -2 if not found)
+    """
+    special_ids = set(tokenizer.all_special_ids)
+    seq_len = len(token_ids)
+    
+    # Walk backwards from the end, skipping special tokens
+    for pos in range(seq_len - 1, -1, -1):
+        token_id = token_ids[pos].item()
+        if token_id not in special_ids:
+            return pos
+    
+    # Fallback: return -2 if no non-special token found (shouldn't happen normally)
+    return seq_len - 2 if seq_len >= 2 else 0
+
+
 def _save_activations_worker(save_queue: queue.Queue) -> None:
     """Worker function to save activations from queue to disk."""
     while True:
@@ -50,7 +74,8 @@ def store_activations(
     end_idx: Optional[int] = None,
     layer_idx: Optional[int] = None,
     token_position: str = "final",
-    verbose: bool = False
+    verbose: bool = False,
+    full_rollout_text: Optional[str] = None
 ) -> None:
     """
     Extract and store activations from sentence data.
@@ -114,7 +139,8 @@ def store_activations(
                 
                 try:
                     # Reconstruct sequence messages
-                    messages = reconstruct_sequence_messages(sentence_data_list, sentence_index)
+                    messages = reconstruct_sequence_messages(sentence_data_list, sentence_index, 
+                                                             full_rollout_text=full_rollout_text)
                     
                     # Format with chat template
                     chat_formatted = format_with_chat_template(messages, tokenizer)
@@ -154,11 +180,10 @@ def store_activations(
                         
                         # Extract specified token position
                         if token_pos is None:
-                            # Extract final content token (skip EOS token at -1)
-                            # The chat template adds <|return|> (EOS) at the end, so we want -2
-                            # This gives us the last actual content token, not the EOS token
-                            token_activations = activations[:, -2, :]
-                            actual_token_pos = -2
+                            # Extract final content token (skip special tokens at the end)
+                            # Find the last non-special token by walking backwards
+                            actual_token_pos = find_last_content_token_position(token_ids, tokenizer)
+                            token_activations = activations[:, actual_token_pos, :]
                         else:
                             # Extract specific token position
                             if token_pos >= activations.shape[1] or token_pos < -activations.shape[1]:
@@ -169,7 +194,10 @@ def store_activations(
                         if verbose:
                             logger.info(f"Full activations shape: {activations.shape}")
                             logger.info(f"Extracted token activations shape: {token_activations.shape}")
-                            logger.info(f"Token position extracted: {actual_token_pos} (position -1 is EOS token <|return|>)")
+                            if token_pos is None:
+                                logger.info(f"Token position extracted: {actual_token_pos} (last content token, skipping special tokens)")
+                            else:
+                                logger.info(f"Token position extracted: {actual_token_pos}")
                             # Show what token we're extracting
                             if actual_token_pos < 0:
                                 token_idx = len(token_ids) + actual_token_pos

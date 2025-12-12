@@ -55,9 +55,15 @@ class RolloutGenerator:
         """Get the output path for a prompt/rollout combination."""
         return Path(output_dir) / f"{prompt_name}_rollout_{rollout_idx}_rollouts.json"
     
-    def _save_result_file(self, output_path: Path, sentence_data_list: List[Dict[str, Any]]) -> bool:
+    def _save_result_file(self, output_path: Path, sentence_data_list: List[Dict[str, Any]], 
+                          full_rollout_text: Optional[str] = None) -> bool:
         """
         Save a result file atomically (write to temp file, then rename).
+        
+        Args:
+            output_path: Path to save the file
+            sentence_data_list: List of sentence data dictionaries
+            full_rollout_text: Optional full rollout text for reconstruction (new format)
         
         Returns:
             True if successful, False otherwise
@@ -67,7 +73,16 @@ class RolloutGenerator:
             # Write to temp file first, then rename atomically
             temp_path = output_path.with_suffix('.tmp')
             with open(temp_path, 'w') as f:
-                json.dump(sentence_data_list, f, indent=2)
+                if full_rollout_text is not None:
+                    # New format: dict with full_rollout_text and sentence_data
+                    output_data = {
+                        "full_rollout_text": full_rollout_text,
+                        "sentence_data": sentence_data_list
+                    }
+                else:
+                    # Old format: just list (backward compatibility)
+                    output_data = sentence_data_list
+                json.dump(output_data, f, indent=2)
             temp_path.replace(output_path)
             return True
         except Exception as e:
@@ -81,18 +96,39 @@ class RolloutGenerator:
                     pass
             return False
     
-    def _load_existing_result(self, output_path: Path) -> Optional[List[Dict[str, Any]]]:
-        """Load an existing result file if it exists and is valid."""
+    def _load_existing_result(self, output_path: Path) -> Optional[Dict[str, Any]]:
+        """
+        Load an existing result file if it exists and is valid.
+        
+        Returns:
+            Dict with keys:
+                - 'sentence_data': List of sentence data dictionaries
+                - 'full_rollout_text': Optional full rollout text (None for old format)
+            Or None if file doesn't exist or is invalid
+        """
         if not output_path.exists():
             return None
         try:
             with open(output_path, 'r') as f:
                 data = json.load(f)
-            # Validate it's a list of sentence data
+            
+            # Handle new format: dict with full_rollout_text and sentence_data
+            if isinstance(data, dict):
+                if "sentence_data" in data:
+                    return {
+                        "sentence_data": data["sentence_data"],
+                        "full_rollout_text": data.get("full_rollout_text")
+                    }
+            
+            # Handle old format: list of sentence data (backward compatibility)
             if isinstance(data, list) and len(data) > 0:
                 # Quick validation: check if first item has required fields
                 if isinstance(data[0], dict) and "sentence_index" in data[0]:
-                    return data
+                    return {
+                        "sentence_data": data,
+                        "full_rollout_text": None  # Old format doesn't have this
+                    }
+            
             return None
         except Exception as e:
             # File might be corrupted or incomplete
@@ -122,7 +158,8 @@ class RolloutGenerator:
                 if existing is not None:
                     # Check if it has all expected sentences
                     expected_indices = set(rollout_data["selected_indices"])
-                    existing_indices = {s.get("sentence_index") for s in existing if isinstance(s, dict)}
+                    existing_sentence_data = existing.get("sentence_data", [])
+                    existing_indices = {s.get("sentence_index") for s in existing_sentence_data if isinstance(s, dict)}
                     
                     if expected_indices.issubset(existing_indices):
                         completed.add((prompt_idx, rollout_idx))
@@ -484,7 +521,8 @@ class RolloutGenerator:
                     
                     if existing is not None:
                         # Get set of completed sentence indices
-                        existing_indices = {s.get("sentence_index") for s in existing if isinstance(s, dict)}
+                        existing_sentence_data = existing.get("sentence_data", [])
+                        existing_indices = {s.get("sentence_index") for s in existing_sentence_data if isinstance(s, dict)}
                         for sent_idx in existing_indices:
                             completed_sentences.add((prompt_idx, rollout_idx, sent_idx))
         
@@ -581,7 +619,8 @@ class RolloutGenerator:
                 existing = self._load_existing_result(output_path)
                 if existing is not None:
                     # Merge existing results
-                    existing_dict = {s.get("sentence_index"): s for s in existing if isinstance(s, dict)}
+                    existing_sentence_data = existing.get("sentence_data", [])
+                    existing_dict = {s.get("sentence_index"): s for s in existing_sentence_data if isinstance(s, dict)}
                     
                     # If we already have results for this prompt/rollout, merge them
                     if prompt_idx in results_dict and rollout_idx in results_dict[prompt_idx]:
@@ -591,7 +630,7 @@ class RolloutGenerator:
                         results_dict[prompt_idx][rollout_idx] = [current_dict[i] for i in sorted(current_dict.keys())]
                     else:
                         # Use existing results
-                        results_dict[prompt_idx][rollout_idx] = existing
+                        results_dict[prompt_idx][rollout_idx] = existing_sentence_data
         
         return results_dict
     
@@ -682,7 +721,9 @@ class RolloutGenerator:
                 if save_progressively:
                     sentence_data_list = results_dict[prompt_idx][rollout_idx]
                     output_path = self._get_output_path(prompt_name, rollout_idx, output_dir)
-                    success = self._save_result_file(output_path, sentence_data_list)
+                    # Get full_rollout_text from rollout_data
+                    full_rollout_text = rollout_data.get("best_rollout")
+                    success = self._save_result_file(output_path, sentence_data_list, full_rollout_text=full_rollout_text)
                     if not success and pbar:
                         pbar.write(f"  ⚠ Failed to save {prompt_name}_rollout_{rollout_idx}")
             
@@ -746,21 +787,34 @@ class RolloutGenerator:
                 # Skip if already exists and not forcing resave
                 if not force_resave and output_path.exists():
                     existing = self._load_existing_result(output_path)
-                    if existing is not None and len(existing) == len(sentence_data_list):
-                        skipped += 1
-                        saved_results.append({
-                            "prompt_name": prompt_name,
-                            "rollout_index": rollout_idx,
-                            "num_sentences": len(sentence_data_list),
-                            "sentence_data": existing  # Use existing data
-                        })
+                    if existing is not None:
+                        existing_sentence_data = existing.get("sentence_data", [])
+                        if len(existing_sentence_data) == len(sentence_data_list):
+                            skipped += 1
+                            saved_results.append({
+                                "prompt_name": prompt_name,
+                                "rollout_index": rollout_idx,
+                                "num_sentences": len(sentence_data_list),
+                                "sentence_data": existing_sentence_data  # Use existing data
+                            })
                         if pbar:
                             pbar.update(1)
                             pbar.set_postfix({'saved': len(saved_results), 'skipped': skipped})
                         continue
                 
+                # Get full_rollout_text from processed_prompts
+                full_rollout_text = None
+                for processed_prompt in processed_prompts:
+                    if processed_prompt["prompt_idx"] == prompt_idx:
+                        for rollout_data in processed_prompt["rollouts_data"]:
+                            if rollout_data["rollout_idx"] == rollout_idx:
+                                full_rollout_text = rollout_data.get("best_rollout")
+                                break
+                        if full_rollout_text is not None:
+                            break
+                
                 # Save the file
-                success = self._save_result_file(output_path, sentence_data_list)
+                success = self._save_result_file(output_path, sentence_data_list, full_rollout_text=full_rollout_text)
                 if success:
                     saved_results.append({
                         "prompt_name": prompt_name,

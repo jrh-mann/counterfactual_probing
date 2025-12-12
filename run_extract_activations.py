@@ -11,7 +11,7 @@ Configure the experiment parameters at the top of this file, then run:
 import sys
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -86,10 +86,33 @@ def extract_rollout_idx(rollout_file: str) -> Optional[int]:
     return None
 
 
-def load_rollout_json(rollout_file: str) -> list:
-    """Load rollout JSON file."""
+def load_rollout_json(rollout_file: str) -> Dict[str, Any]:
+    """
+    Load rollout JSON file.
+    
+    Returns:
+        Dict with keys:
+            - 'sentence_data': List of sentence data dictionaries
+            - 'full_rollout_text': Optional full rollout text (None for old format)
+    """
     with open(rollout_file, 'r') as f:
-        return json.load(f)
+        data = json.load(f)
+    
+    # Handle new format: dict with full_rollout_text and sentence_data
+    if isinstance(data, dict) and "sentence_data" in data:
+        return {
+            "sentence_data": data["sentence_data"],
+            "full_rollout_text": data.get("full_rollout_text")
+        }
+    
+    # Handle old format: list of sentence data (backward compatibility)
+    if isinstance(data, list):
+        return {
+            "sentence_data": data,
+            "full_rollout_text": None
+        }
+    
+    raise ValueError(f"Invalid JSON format in {rollout_file}")
 
 
 def save_metadata(
@@ -97,7 +120,7 @@ def save_metadata(
     sentence_data_list: list,
     activations_dir: str,
     start_idx: int = 0,
-    end_idx: int = None
+    end_idx: Optional[int] = None
 ) -> None:
     """Save metadata JSON file for cross-referencing."""
     end_idx = end_idx if end_idx is not None else len(sentence_data_list)
@@ -154,8 +177,14 @@ def process_rollout_file(
         logger.info(f"\n{'=' * 70}")
         logger.info(f"Processing: {rollout_file}")
         logger.info(f"{'=' * 70}")
-        sentence_data_list = load_rollout_json(rollout_file)
+        rollout_data = load_rollout_json(rollout_file)
+        sentence_data_list = rollout_data["sentence_data"]
+        full_rollout_text = rollout_data.get("full_rollout_text")
         logger.info(f"Loaded {len(sentence_data_list)} sentences")
+        if full_rollout_text:
+            logger.info("  Full rollout text available for accurate reconstruction")
+        else:
+            logger.info("  Full rollout text not available (old format) - may have gaps in reconstruction")
         
         # Extract prompt name and rollout index
         prompt_name = extract_prompt_name(rollout_file)
@@ -191,7 +220,8 @@ def process_rollout_file(
             end_idx=end_idx,
             layer_idx=layer_idx,
             token_position=token_position,
-            verbose=verbose
+            verbose=verbose,
+            full_rollout_text=full_rollout_text
         )
         
         # Save metadata
