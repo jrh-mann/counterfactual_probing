@@ -47,7 +47,7 @@ DTYPE = "bfloat16"  # Data type: "bfloat16", "float16", or "float32"
 # Extraction parameters
 LAYER_IDX = None  # Specific layer index to extract (None = all layers)
 TOKEN_POSITION = "final"  # Which token to extract: "final" (last content token) or integer index
-NUM_TOKENS = 5  # Number of final content tokens to extract (only used when TOKEN_POSITION="final")
+NUM_TOKENS = 8  # Number of final content tokens to extract (only used when TOKEN_POSITION="final")
 START_IDX = 0  # Starting sentence index (0 = first sentence)
 END_IDX = None  # Ending sentence index (None = all sentences)
 
