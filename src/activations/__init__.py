@@ -12,7 +12,9 @@ from .load import (
     stack_activations_by_layer,
     get_activation_matrix,
     get_reward_hacking_labels,
-    quick_load
+    quick_load,
+    quick_load_legacy,
+    clear_cache
 )
 
 __all__ = [
@@ -26,6 +28,8 @@ __all__ = [
     'stack_activations_by_layer',
     'get_activation_matrix',
     'get_reward_hacking_labels',
-    'quick_load'
+    'quick_load',
+    'quick_load_legacy',
+    'clear_cache'
 ]
 

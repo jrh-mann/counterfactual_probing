@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trajectory Comparison</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #333;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+
+        .subtitle {
+            color: #888;
+            font-size: 0.95rem;
+        }
+
+        .nav {
+            margin-bottom: 20px;
+        }
+
+        .nav a {
+            color: #5a9cf5;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+
+        .nav a:hover {
+            text-decoration: underline;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+
+        label {
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        input[type="number"] {
+            padding: 10px 15px;
+            font-size: 0.95rem;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            width: 80px;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #5a9cf5;
+        }
+
+        input[type="range"] {
+            width: 200px;
+            height: 6px;
+            -webkit-appearance: none;
+            background: #333;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #5a9cf5;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: #5a9cf5;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+
+        .slider-value {
+            min-width: 50px;
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 0.85rem;
+            color: #5a9cf5;
+        }
+
+        button {
+            padding: 10px 24px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #5a9cf5;
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #4a8ce5;
+        }
+
+        .btn-primary:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .status.loading {
+            background: #2a2a4a;
+            color: #8a8aff;
+        }
+
+        .status.error {
+            background: #4a2a2a;
+            color: #ff8a8a;
+        }
+
+        .status.success {
+            background: #2a4a2a;
+            color: #8aff8a;
+        }
+
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 25px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-color {
+            width: 30px;
+            height: 4px;
+            border-radius: 2px;
+        }
+
+        .legend-color.safe {
+            background: #5a9cf5;
+        }
+
+        .legend-color.hacking {
+            background: #f55a5a;
+        }
+
+        .chart-container {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .chart-title {
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+
+        .chart-stats {
+            color: #888;
+            font-size: 0.85rem;
+        }
+
+        #trajectory-chart {
+            width: 100%;
+            height: 400px;
+            border-radius: 6px;
+            background: #111;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+
+        .rollout-list {
+            margin-top: 20px;
+        }
+
+        .rollout-list h3 {
+            font-size: 1rem;
+            margin-bottom: 10px;
+            color: #888;
+        }
+
+        .rollout-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .rollout-chip {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-family: 'SF Mono', 'Consolas', monospace;
+        }
+
+        .rollout-chip.safe {
+            background: rgba(90, 156, 245, 0.2);
+            color: #5a9cf5;
+        }
+
+        .rollout-chip.hacking {
+            background: rgba(245, 90, 90, 0.2);
+            color: #f55a5a;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="/">← Back to Token Viewer</a>
+        </div>
+
+        <header>
+            <h1>Trajectory Comparison</h1>
+            <p class="subtitle">Compare probe probability trajectories between reward hacking and safe rollouts</p>
+        </header>
+
+        <div class="controls">
+            <label for="n-samples">Samples per class:</label>
+            <input type="number" id="n-samples" value="5" min="1" max="20">
+            <button class="btn-primary" id="load-btn">Load & Compare</button>
+            <div id="status" class="status" style="display: none;"></div>
+        </div>
+
+        <div class="controls" id="ema-controls" style="display: none;">
+            <label for="ema-slider">EMA Smoothing:</label>
+            <input type="range" id="ema-slider" min="0" max="0.99" step="0.01" value="0">
+            <span id="ema-value" class="slider-value">Off</span>
+        </div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color safe"></div>
+                <span>Safe rollouts</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color hacking"></div>
+                <span>Reward hacking rollouts</span>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="chart-header">
+                <span class="chart-title">Probe Probability Over Tokens</span>
+                <span class="chart-stats" id="chart-stats"></span>
+            </div>
+            <canvas id="trajectory-chart"></canvas>
+        </div>
+
+        <div class="rollout-list" id="rollout-list" style="display: none;">
+            <h3>Included Rollouts</h3>
+            <div class="rollout-chips" id="rollout-chips"></div>
+        </div>
+    </div>
+
+    <script>
+        const nSamplesInput = document.getElementById('n-samples');
+        const loadBtn = document.getElementById('load-btn');
+        const statusDiv = document.getElementById('status');
+        const chartCanvas = document.getElementById('trajectory-chart');
+        const chartStats = document.getElementById('chart-stats');
+        const rolloutList = document.getElementById('rollout-list');
+        const rolloutChips = document.getElementById('rollout-chips');
+        const emaControls = document.getElementById('ema-controls');
+        const emaSlider = document.getElementById('ema-slider');
+        const emaValue = document.getElementById('ema-value');
+
+        // Store raw trajectories for re-rendering with different EMA
+        let rawTrajectories = null;
+
+        // Apply EMA smoothing to an array
+        function applyEMA(data, alpha) {
+            if (alpha === 0 || data.length === 0) return data;
+            
+            const result = [data[0]];
+            for (let i = 1; i < data.length; i++) {
+                result.push(alpha * result[i - 1] + (1 - alpha) * data[i]);
+            }
+            return result;
+        }
+
+        // Update EMA value display
+        function updateEMADisplay() {
+            const alpha = parseFloat(emaSlider.value);
+            if (alpha === 0) {
+                emaValue.textContent = 'Off';
+            } else {
+                emaValue.textContent = alpha.toFixed(2);
+            }
+        }
+
+        // Handle EMA slider change
+        emaSlider.addEventListener('input', () => {
+            updateEMADisplay();
+            if (rawTrajectories) {
+                drawTrajectories(rawTrajectories);
+            }
+        });
+
+        function showStatus(message, type = 'loading') {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+            statusDiv.style.display = 'block';
+        }
+
+        function hideStatus() {
+            statusDiv.style.display = 'none';
+        }
+
+        function drawTrajectories(trajectories) {
+            const ctx = chartCanvas.getContext('2d');
+            const width = chartCanvas.width = chartCanvas.offsetWidth * 2;
+            const height = chartCanvas.height = 800;
+            
+            ctx.scale(2, 2);
+            const w = width / 2;
+            const h = height / 2;
+            
+            // Clear
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, w, h);
+            
+            if (trajectories.length === 0) return;
+            
+            const padding = { top: 20, right: 20, bottom: 40, left: 50 };
+            const chartW = w - padding.left - padding.right;
+            const chartH = h - padding.top - padding.bottom;
+            
+            // Draw grid
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 0.5;
+            
+            // Horizontal grid lines
+            for (let i = 0; i <= 4; i++) {
+                const y = padding.top + (chartH * i / 4);
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(w - padding.right, y);
+                ctx.stroke();
+            }
+            
+            // Vertical grid lines (0%, 25%, 50%, 75%, 100% of sequence)
+            for (let i = 0; i <= 4; i++) {
+                const x = padding.left + (chartW * i / 4);
+                ctx.beginPath();
+                ctx.moveTo(x, padding.top);
+                ctx.lineTo(x, padding.top + chartH);
+                ctx.stroke();
+            }
+            
+            // Y-axis labels
+            ctx.fillStyle = '#666';
+            ctx.font = '11px system-ui';
+            ctx.textAlign = 'right';
+            for (let i = 0; i <= 4; i++) {
+                const val = 100 - (i * 25);
+                const y = padding.top + (chartH * i / 4);
+                ctx.fillText(`${val}%`, padding.left - 8, y + 4);
+            }
+            
+            // X-axis labels (normalized 0% to 100%)
+            ctx.textAlign = 'center';
+            for (let i = 0; i <= 4; i++) {
+                const val = i * 25;
+                const x = padding.left + (chartW * i / 4);
+                ctx.fillText(`${val}%`, x, h - padding.bottom + 15);
+            }
+            
+            // X-axis label
+            ctx.fillText('Sequence Position (normalized)', w / 2, h - 5);
+            
+            // Y-axis label
+            ctx.save();
+            ctx.translate(15, h / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText('Probe Probability', 0, 0);
+            ctx.restore();
+            
+            // Get current EMA alpha
+            const emaAlpha = parseFloat(emaSlider.value);
+            
+            // Draw trajectories - normalized by sequence length
+            trajectories.forEach((traj, trajIdx) => {
+                const rawProbs = traj.probabilities;
+                if (rawProbs.length < 2) return;
+                
+                // Apply EMA smoothing
+                const probs = applyEMA(rawProbs, emaAlpha);
+                
+                const color = traj.is_reward_hacking ? 'rgba(245, 90, 90, 0.6)' : 'rgba(90, 156, 245, 0.6)';
+                
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1.5;
+                
+                for (let i = 0; i < probs.length; i++) {
+                    // Normalize x position: each trajectory spans 0 to 1
+                    const normalizedX = i / (probs.length - 1);
+                    const x = padding.left + normalizedX * chartW;
+                    const y = padding.top + (1 - probs[i]) * chartH;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+            });
+            
+            // Update stats
+            const rhTrajs = trajectories.filter(t => t.is_reward_hacking);
+            const safeTrajs = trajectories.filter(t => !t.is_reward_hacking);
+            chartStats.textContent = `${safeTrajs.length} safe · ${rhTrajs.length} reward hacking`;
+            
+            // Update rollout list
+            rolloutList.style.display = 'block';
+            rolloutChips.innerHTML = '';
+            
+            trajectories.forEach(traj => {
+                const chip = document.createElement('span');
+                chip.className = `rollout-chip ${traj.is_reward_hacking ? 'hacking' : 'safe'}`;
+                chip.textContent = traj.rollout_file.replace('_rollouts.json', '');
+                rolloutChips.appendChild(chip);
+            });
+        }
+
+        async function loadAndCompare() {
+            const nSamples = parseInt(nSamplesInput.value) || 5;
+            
+            loadBtn.disabled = true;
+            showStatus('Scanning rollouts and computing trajectories... This may take a while.', 'loading');
+
+            try {
+                const response = await fetch('/api/compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ n_samples: nSamples })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Comparison failed');
+                }
+
+                const result = await response.json();
+                
+                // Store raw trajectories for EMA slider
+                rawTrajectories = result.trajectories;
+                
+                // Show EMA controls
+                emaControls.style.display = 'flex';
+                
+                drawTrajectories(result.trajectories);
+                showStatus(`Loaded ${result.trajectories.length} rollouts`, 'success');
+                
+                setTimeout(hideStatus, 3000);
+            } catch (error) {
+                showStatus('Error: ' + error.message, 'error');
+            } finally {
+                loadBtn.disabled = false;
+            }
+        }
+
+        loadBtn.addEventListener('click', loadAndCompare);
+    </script>
+</body>
+</html>

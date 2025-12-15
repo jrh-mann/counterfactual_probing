@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Probe Visualization</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #333;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+
+        .subtitle {
+            color: #888;
+            font-size: 0.95rem;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+
+        select {
+            padding: 10px 15px;
+            font-size: 0.95rem;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            min-width: 350px;
+            cursor: pointer;
+        }
+
+        select:hover {
+            border-color: #666;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: #5a9cf5;
+        }
+
+        button {
+            padding: 10px 24px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #5a9cf5;
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #4a8ce5;
+        }
+
+        .btn-primary:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .status.loading {
+            background: #2a2a4a;
+            color: #8a8aff;
+        }
+
+        .status.error {
+            background: #4a2a2a;
+            color: #ff8a8a;
+        }
+
+        .status.success {
+            background: #2a4a2a;
+            color: #8aff8a;
+        }
+
+        .rh-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .rh-label {
+            color: #888;
+            font-size: 0.85rem;
+        }
+
+        .rh-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .rh-badge.safe {
+            background: hsl(120, 50%, 25%);
+            color: hsl(120, 70%, 70%);
+        }
+
+        .rh-badge.hacking {
+            background: hsl(0, 50%, 25%);
+            color: hsl(0, 70%, 70%);
+        }
+
+        .chart-container {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .chart-title {
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: #ccc;
+        }
+
+        .chart-stats {
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        #prob-chart {
+            width: 100%;
+            height: 120px;
+            border-radius: 6px;
+            background: #111;
+        }
+
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+
+        .legend-label {
+            color: #888;
+        }
+
+        .legend-bar {
+            width: 200px;
+            height: 20px;
+            border-radius: 4px;
+            background: linear-gradient(to right, 
+                hsl(120, 60%, 35%), 
+                hsl(60, 60%, 40%), 
+                hsl(30, 70%, 45%), 
+                hsl(0, 70%, 45%)
+            );
+        }
+
+        .tokens-container {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 25px;
+            min-height: 200px;
+        }
+
+        .tokens-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        .tokens-title {
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+
+        .token-count {
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        .tokens-display {
+            font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+            line-height: 1.8;
+            word-break: break-word;
+        }
+
+        .token {
+            display: inline;
+            padding: 3px 0;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            position: relative;
+        }
+
+        .token:hover {
+            filter: brightness(1.3);
+            text-decoration: underline;
+            text-decoration-thickness: 2px;
+        }
+
+        /* Space tokens - render as actual space with subtle background */
+        .token.space {
+            background: transparent !important;
+            color: inherit !important;
+        }
+
+        /* Newline tokens - create actual line break */
+        .token.newline {
+            display: block;
+            height: 0.5em;
+            background: transparent !important;
+        }
+
+        /* Multiple newlines */
+        .token.newline + .token.newline {
+            height: 0.3em;
+        }
+
+        /* Special/control tokens */
+        .token.special {
+            opacity: 0.6;
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            border: 1px dashed #555;
+            margin: 0 2px;
+            vertical-align: middle;
+        }
+
+        .token-tooltip {
+            position: fixed;
+            background: #252525;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 0.85rem;
+            pointer-events: none;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+            max-width: 320px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .token-tooltip .prob {
+            font-weight: 700;
+            font-size: 1.4rem;
+            margin-bottom: 8px;
+            font-family: 'SF Mono', 'Consolas', monospace;
+        }
+
+        .token-tooltip .token-preview {
+            background: #333;
+            padding: 6px 10px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            font-family: 'SF Mono', 'Consolas', monospace;
+            word-break: break-all;
+        }
+
+        .token-tooltip .details {
+            color: #999;
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+
+        /* Line wrapper for better structure */
+        .token-line {
+            display: block;
+            min-height: 1.6em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Probe Visualization Dashboard</h1>
+            <p class="subtitle">Visualize per-token reward hacking probe activations</p>
+        </header>
+
+        <div class="controls">
+            <select id="rollout-select">
+                <option value="">Select a rollout file...</option>
+            </select>
+            <button class="btn-primary" id="analyze-btn" disabled>Analyze</button>
+            <div id="status" class="status" style="display: none;"></div>
+            <div id="rh-indicator" class="rh-indicator" style="display: none;">
+                <span class="rh-label">Ground Truth:</span>
+                <span class="rh-badge" id="rh-badge"></span>
+            </div>
+        </div>
+        
+        <div class="chart-container" id="chart-container" style="display: none;">
+            <div class="chart-header">
+                <span class="chart-title">Probe Probability Over Tokens</span>
+                <span class="chart-stats" id="chart-stats"></span>
+            </div>
+            <canvas id="prob-chart" width="800" height="120"></canvas>
+        </div>
+
+        <div class="legend">
+            <span class="legend-label">Probe probability:</span>
+            <span>0.0 (safe)</span>
+            <div class="legend-bar"></div>
+            <span>1.0 (reward hacking)</span>
+        </div>
+
+        <div class="tokens-container">
+            <div class="tokens-header">
+                <span class="tokens-title">Token Visualization</span>
+                <span class="token-count" id="token-count"></span>
+            </div>
+            <div class="tokens-display" id="tokens-display">
+                <div class="empty-state">
+                    <div class="empty-state-icon">📊</div>
+                    <p>Select a rollout file and click Analyze to visualize probe activations</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="token-tooltip" id="tooltip" style="display: none;"></div>
+
+    <script>
+        const rolloutSelect = document.getElementById('rollout-select');
+        const analyzeBtn = document.getElementById('analyze-btn');
+        const statusDiv = document.getElementById('status');
+        const tokensDisplay = document.getElementById('tokens-display');
+        const tokenCount = document.getElementById('token-count');
+        const tooltip = document.getElementById('tooltip');
+        const rhIndicator = document.getElementById('rh-indicator');
+        const rhBadge = document.getElementById('rh-badge');
+        const chartContainer = document.getElementById('chart-container');
+        const chartCanvas = document.getElementById('prob-chart');
+        const chartStats = document.getElementById('chart-stats');
+
+        // Fetch available rollouts on page load
+        async function loadRollouts() {
+            try {
+                const response = await fetch('/api/rollouts');
+                const rollouts = await response.json();
+                
+                rollouts.forEach(rollout => {
+                    const option = document.createElement('option');
+                    option.value = rollout;
+                    option.textContent = rollout;
+                    rolloutSelect.appendChild(option);
+                });
+            } catch (error) {
+                showStatus('Failed to load rollouts: ' + error.message, 'error');
+            }
+        }
+
+        // Enable/disable analyze button based on selection
+        rolloutSelect.addEventListener('change', () => {
+            analyzeBtn.disabled = !rolloutSelect.value;
+        });
+
+        // Show status message
+        function showStatus(message, type = 'loading') {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+            statusDiv.style.display = 'block';
+        }
+
+        function hideStatus() {
+            statusDiv.style.display = 'none';
+        }
+
+        // Get color for probability value (0 = green, 1 = red)
+        function getProbColor(prob) {
+            // HSL: 120 (green) -> 0 (red)
+            const hue = (1 - prob) * 120;
+            const saturation = 60 + prob * 15;
+            const lightness = 25 + prob * 15;
+            return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+        }
+
+        // Get text color based on background
+        function getTextColor(prob) {
+            return prob > 0.6 ? '#fff' : '#eee';
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Check if token is a special/control token
+        function isSpecialToken(token) {
+            return token.startsWith('<') && token.endsWith('>');
+        }
+
+        // Check if token is purely whitespace
+        function isWhitespaceToken(token) {
+            return /^\s+$/.test(token);
+        }
+
+        // Check if token contains newline
+        function hasNewline(token) {
+            return token.includes('\n');
+        }
+
+        // Render tokens
+        function renderTokens(tokens) {
+            tokensDisplay.innerHTML = '';
+            tokenCount.textContent = `${tokens.length} tokens`;
+
+            tokens.forEach((tokenData, index) => {
+                const token = tokenData.token;
+                const prob = tokenData.probability;
+                const bgColor = getProbColor(prob);
+                const textColor = getTextColor(prob);
+
+                // Handle tokens with newlines - split them
+                if (hasNewline(token)) {
+                    const parts = token.split('\n');
+                    parts.forEach((part, partIndex) => {
+                        // Render the text part if not empty
+                        if (part.length > 0) {
+                            const span = createTokenSpan(part, tokenData, bgColor, textColor);
+                            tokensDisplay.appendChild(span);
+                        }
+                        // Add line break between parts (not after last)
+                        if (partIndex < parts.length - 1) {
+                            const br = document.createElement('span');
+                            br.className = 'token newline';
+                            br.dataset.prob = prob.toFixed(4);
+                            br.dataset.tokenId = tokenData.token_id;
+                            br.dataset.position = tokenData.position;
+                            br.dataset.token = '\\n';
+                            br.addEventListener('mouseenter', showTooltip);
+                            br.addEventListener('mousemove', moveTooltip);
+                            br.addEventListener('mouseleave', hideTooltip);
+                            tokensDisplay.appendChild(br);
+                        }
+                    });
+                } else if (isSpecialToken(token)) {
+                    // Special tokens like <|im_start|>
+                    const span = document.createElement('span');
+                    span.className = 'token special';
+                    span.textContent = token;
+                    span.style.backgroundColor = bgColor;
+                    span.style.color = textColor;
+                    span.dataset.prob = prob.toFixed(4);
+                    span.dataset.tokenId = tokenData.token_id;
+                    span.dataset.position = tokenData.position;
+                    span.dataset.token = token;
+                    span.addEventListener('mouseenter', showTooltip);
+                    span.addEventListener('mousemove', moveTooltip);
+                    span.addEventListener('mouseleave', hideTooltip);
+                    tokensDisplay.appendChild(span);
+                } else {
+                    // Normal token
+                    const span = createTokenSpan(token, tokenData, bgColor, textColor);
+                    tokensDisplay.appendChild(span);
+                }
+            });
+        }
+
+        function createTokenSpan(displayText, tokenData, bgColor, textColor) {
+            const span = document.createElement('span');
+            span.className = 'token';
+            span.style.backgroundColor = bgColor;
+            span.style.color = textColor;
+            span.textContent = displayText;
+            
+            span.dataset.prob = tokenData.probability.toFixed(4);
+            span.dataset.tokenId = tokenData.token_id;
+            span.dataset.position = tokenData.position;
+            span.dataset.token = tokenData.token;
+            
+            span.addEventListener('mouseenter', showTooltip);
+            span.addEventListener('mousemove', moveTooltip);
+            span.addEventListener('mouseleave', hideTooltip);
+            
+            return span;
+        }
+
+        // Format token for display (escape special chars)
+        function formatTokenDisplay(token) {
+            return token
+                .replace(/\n/g, '\\n')
+                .replace(/\t/g, '\\t')
+                .replace(/\r/g, '\\r');
+        }
+
+        // Tooltip functions
+        function showTooltip(e) {
+            const target = e.target;
+            const prob = parseFloat(target.dataset.prob);
+            const tokenId = target.dataset.tokenId;
+            const position = target.dataset.position;
+            const token = target.dataset.token;
+            
+            const probPercent = (prob * 100).toFixed(1);
+            const probColor = getProbColor(prob);
+            const displayToken = formatTokenDisplay(token);
+            
+            tooltip.innerHTML = `
+                <div class="prob" style="color: ${probColor}">${probPercent}%</div>
+                <div class="token-preview">${escapeHtml(displayToken)}</div>
+                <div class="details">
+                    Position: ${position} · Token ID: ${tokenId}
+                </div>
+            `;
+            tooltip.style.display = 'block';
+            moveTooltip(e);
+        }
+
+        function moveTooltip(e) {
+            const x = e.clientX + 15;
+            const y = e.clientY + 15;
+            
+            // Keep tooltip in viewport
+            const rect = tooltip.getBoundingClientRect();
+            const maxX = window.innerWidth - rect.width - 10;
+            const maxY = window.innerHeight - rect.height - 10;
+            
+            tooltip.style.left = Math.min(x, maxX) + 'px';
+            tooltip.style.top = Math.min(y, maxY) + 'px';
+        }
+
+        function hideTooltip() {
+            tooltip.style.display = 'none';
+        }
+
+        // Draw probability chart
+        function drawChart(tokens) {
+            const ctx = chartCanvas.getContext('2d');
+            const width = chartCanvas.width = chartCanvas.offsetWidth * 2;  // Retina
+            const height = chartCanvas.height = 240;  // Retina
+            
+            ctx.scale(2, 2);  // Retina scaling
+            const w = width / 2;
+            const h = height / 2;
+            
+            // Clear
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, w, h);
+            
+            if (tokens.length === 0) return;
+            
+            const probs = tokens.map(t => t.probability);
+            const maxProb = Math.max(...probs);
+            const minProb = Math.min(...probs);
+            const avgProb = probs.reduce((a, b) => a + b, 0) / probs.length;
+            
+            // Update stats
+            chartStats.textContent = `Min: ${(minProb * 100).toFixed(1)}% · Avg: ${(avgProb * 100).toFixed(1)}% · Max: ${(maxProb * 100).toFixed(1)}%`;
+            
+            const padding = { top: 10, right: 10, bottom: 20, left: 40 };
+            const chartW = w - padding.left - padding.right;
+            const chartH = h - padding.top - padding.bottom;
+            
+            // Draw grid lines
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 0.5;
+            for (let i = 0; i <= 4; i++) {
+                const y = padding.top + (chartH * i / 4);
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(w - padding.right, y);
+                ctx.stroke();
+            }
+            
+            // Y-axis labels
+            ctx.fillStyle = '#666';
+            ctx.font = '10px system-ui';
+            ctx.textAlign = 'right';
+            for (let i = 0; i <= 4; i++) {
+                const val = 100 - (i * 25);
+                const y = padding.top + (chartH * i / 4);
+                ctx.fillText(`${val}%`, padding.left - 5, y + 3);
+            }
+            
+            // Draw probability line
+            ctx.beginPath();
+            ctx.strokeStyle = '#5a9cf5';
+            ctx.lineWidth = 1.5;
+            
+            for (let i = 0; i < probs.length; i++) {
+                const x = padding.left + (i / (probs.length - 1)) * chartW;
+                const y = padding.top + (1 - probs[i]) * chartH;
+                
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+            
+            // Draw filled area with gradient
+            ctx.beginPath();
+            for (let i = 0; i < probs.length; i++) {
+                const x = padding.left + (i / (probs.length - 1)) * chartW;
+                const y = padding.top + (1 - probs[i]) * chartH;
+                
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.lineTo(padding.left + chartW, padding.top + chartH);
+            ctx.lineTo(padding.left, padding.top + chartH);
+            ctx.closePath();
+            
+            const gradient = ctx.createLinearGradient(0, padding.top, 0, padding.top + chartH);
+            gradient.addColorStop(0, 'rgba(90, 156, 245, 0.3)');
+            gradient.addColorStop(1, 'rgba(90, 156, 245, 0.05)');
+            ctx.fillStyle = gradient;
+            ctx.fill();
+        }
+
+        // Update RH indicator
+        function updateRHIndicator(isRewardHacking) {
+            rhIndicator.style.display = 'flex';
+            if (isRewardHacking) {
+                rhBadge.textContent = 'Reward Hacking';
+                rhBadge.className = 'rh-badge hacking';
+            } else {
+                rhBadge.textContent = 'Safe';
+                rhBadge.className = 'rh-badge safe';
+            }
+        }
+
+        // Analyze rollout
+        async function analyzeRollout() {
+            const rolloutFile = rolloutSelect.value;
+            if (!rolloutFile) return;
+
+            analyzeBtn.disabled = true;
+            showStatus('Loading and analyzing... This may take a moment.', 'loading');
+
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rollout_file: rolloutFile })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Analysis failed');
+                }
+
+                const result = await response.json();
+                
+                // Update RH indicator (based on expected.json in completion)
+                updateRHIndicator(result.is_reward_hacking);
+                
+                // Draw chart
+                chartContainer.style.display = 'block';
+                drawChart(result.tokens);
+                
+                // Render tokens
+                renderTokens(result.tokens);
+                showStatus(`Analyzed ${result.tokens.length} tokens`, 'success');
+                
+                // Hide success message after a moment
+                setTimeout(hideStatus, 3000);
+            } catch (error) {
+                showStatus('Error: ' + error.message, 'error');
+            } finally {
+                analyzeBtn.disabled = false;
+            }
+        }
+
+        analyzeBtn.addEventListener('click', analyzeRollout);
+
+        // Initialize
+        loadRollouts();
+    </script>
+</body>
+</html>

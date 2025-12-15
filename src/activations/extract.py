@@ -22,9 +22,47 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def find_last_content_token_positions(token_ids: torch.Tensor, tokenizer: PreTrainedTokenizer, num_tokens: int = 1) -> List[int]:
+    """
+    Find the last N non-special token positions by walking backwards from the end.
+    
+    Args:
+        token_ids: Tensor of token IDs
+        tokenizer: Tokenizer to identify special tokens
+        num_tokens: Number of content token positions to return (default 1)
+    
+    Returns:
+        List of indices for the last N content tokens, in forward order (earliest first).
+        If fewer than num_tokens content tokens exist, returns as many as found.
+    """
+    special_ids = set(tokenizer.all_special_ids)
+    seq_len = len(token_ids)
+    
+    # Walk backwards from the end, collecting non-special token positions
+    content_positions = []
+    for pos in range(seq_len - 1, -1, -1):
+        token_id = token_ids[pos].item()
+        if token_id not in special_ids:
+            content_positions.append(pos)
+            if len(content_positions) >= num_tokens:
+                break
+    
+    # Reverse to get forward order (earliest position first)
+    content_positions.reverse()
+    
+    # Fallback: if no content tokens found, return [-2]
+    if not content_positions:
+        return [seq_len - 2] if seq_len >= 2 else [0]
+    
+    return content_positions
+
+
 def find_last_content_token_position(token_ids: torch.Tensor, tokenizer: PreTrainedTokenizer) -> int:
     """
     Find the last non-special token position by walking backwards from the end.
+    
+    DEPRECATED: Use find_last_content_token_positions(token_ids, tokenizer, num_tokens=1) instead.
+    Kept for backward compatibility.
     
     Args:
         token_ids: Tensor of token IDs
@@ -33,17 +71,8 @@ def find_last_content_token_position(token_ids: torch.Tensor, tokenizer: PreTrai
     Returns:
         Index of the last content token (fallback to -2 if not found)
     """
-    special_ids = set(tokenizer.all_special_ids)
-    seq_len = len(token_ids)
-    
-    # Walk backwards from the end, skipping special tokens
-    for pos in range(seq_len - 1, -1, -1):
-        token_id = token_ids[pos].item()
-        if token_id not in special_ids:
-            return pos
-    
-    # Fallback: return -2 if no non-special token found (shouldn't happen normally)
-    return seq_len - 2 if seq_len >= 2 else 0
+    positions = find_last_content_token_positions(token_ids, tokenizer, num_tokens=1)
+    return positions[-1]
 
 
 def _save_activations_worker(save_queue: queue.Queue) -> None:
@@ -74,11 +103,15 @@ def store_activations(
     end_idx: Optional[int] = None,
     layer_idx: Optional[int] = None,
     token_position: str = "final",
+    num_tokens: int = 3,
     verbose: bool = False,
     full_rollout_text: Optional[str] = None
 ) -> None:
     """
-    Extract and store activations from sentence data.
+    Extract and store activations from sentence data using single-pass optimization.
+    
+    Runs ONE forward pass on the full rollout and extracts activations for each 
+    sentence by finding token positions via character offset mapping.
     
     Args:
         model_name: HuggingFace model identifier (for logging)
@@ -90,153 +123,141 @@ def store_activations(
         end_idx: Ending sentence index (defaults to None, processes all)
         layer_idx: Specific layer index to extract (defaults to None, extracts all layers)
         token_position: Which token to extract (defaults to "final", can be "final" or integer index)
+        num_tokens: Number of final content tokens to average over (defaults to 3).
         verbose: Print detailed output for review
+        full_rollout_text: Full rollout text (REQUIRED for single-pass optimization)
     """
-    # Create activations directory
+    import sys
+    from pathlib import Path as PathLib
+    sys.path.insert(0, str(PathLib(__file__).parent.parent))
+    from utils.text_utils import split_sentences
+    
     os.makedirs(activations_dir, exist_ok=True)
     logger.info(f"Activations will be saved to: {activations_dir}")
     
-    # Determine range to process
-    # Note: start_idx and end_idx refer to positions in sentence_data_list, not sentence_index values
-    # This is important when using selected sentences format
+    if full_rollout_text is None:
+        raise ValueError("full_rollout_text is required for optimized extraction")
+    
+    # Get formatted prompt from first sentence
+    formatted_prompt = sentence_data_list[0].get("formatted_prompt", [])
+    if not formatted_prompt:
+        raise ValueError("formatted_prompt not found in sentence data")
+    
+    # Split rollout into sentences
+    sentences = split_sentences(full_rollout_text)
+    logger.info(f"Split rollout into {len(sentences)} sentences")
+    
+    # Determine which sentences to process
     end_idx = end_idx if end_idx is not None else len(sentence_data_list)
     sentences_to_process = sentence_data_list[start_idx:end_idx]
+    sentence_indices = [s.get("sentence_index", i) for i, s in enumerate(sentences_to_process, start_idx)]
+    logger.info(f"Processing {len(sentences_to_process)} sentences: {sentence_indices}")
     
-    # Check if we're using selected sentences format
-    has_sentence_index_field = all("sentence_index" in s for s in sentence_data_list)
-    if has_sentence_index_field:
-        # Get the actual sentence indices that will be processed
-        sentence_indices = [s.get("sentence_index") for s in sentences_to_process]
-        logger.info(f"Processing {len(sentences_to_process)} sentences (list positions {start_idx} to {end_idx-1})")
-        logger.info(f"  Sentence indices: {sentence_indices}")
-    else:
-        logger.info(f"Processing {len(sentences_to_process)} sentences (indices {start_idx} to {end_idx-1})")
+    # Format full rollout (add_generation_prompt=False since content is complete)
+    full_messages = formatted_prompt.copy()
+    full_messages.append({"role": "assistant", "content": full_rollout_text})
+    full_formatted = tokenizer.apply_chat_template(
+        full_messages, tokenize=False, add_generation_prompt=False
+    )
     
-    # Parse token_position
-    if token_position == "final":
-        token_pos = None  # Will use -2 to get final content token (skip EOS at -1)
-    else:
-        try:
-            token_pos = int(token_position)
-        except ValueError:
-            raise ValueError(f"token_position must be 'final' or an integer, got: {token_position}")
+    # Tokenize with offset mapping
+    encoding = tokenizer(full_formatted, return_offsets_mapping=True, return_tensors='pt')
+    full_tokens = encoding['input_ids'][0]
+    offset_mapping = encoding['offset_mapping'][0].tolist()
     
-    # Create queue for saving activations and start worker thread
-    save_queue: queue.Queue = queue.Queue(maxsize=10)  # Limit queue size to prevent excessive memory usage
-    save_thread = threading.Thread(target=_save_activations_worker, args=(save_queue,))
-    save_thread.start()
+    logger.info(f"Full sequence: {len(full_tokens)} tokens, {len(full_formatted)} chars")
     
-    try:
-        # Process one at a time (simple and reliable)
-        with torch.no_grad():
-            for i, sentence_data in enumerate(sentences_to_process):
-                actual_idx = start_idx + i
-                sentence_index = sentence_data.get("sentence_index", actual_idx)
-                
-                # Clear GPU memory
-                gc.collect()
-                torch.cuda.empty_cache()
-                
-                try:
-                    # Reconstruct sequence messages
-                    messages = reconstruct_sequence_messages(sentence_data_list, sentence_index, 
-                                                             full_rollout_text=full_rollout_text)
-                    
-                    # Format with chat template
-                    chat_formatted = format_with_chat_template(messages, tokenizer)
-                    
-                    if verbose:
-                        logger.info(f"\n=== Sentence {sentence_index} ===")
-                        logger.info(f"Messages: {messages}")
-                        logger.info(f"Chat formatted (first 500 chars): {chat_formatted[:500]}")
-                        if len(chat_formatted) > 700:
-                            logger.info(f"Chat formatted (last 200 chars): ...{chat_formatted[-200:]}")
-                    
-                    # Tokenize to get token IDs (do this first, outside trace)
-                    token_ids = tokenizer.encode(chat_formatted, return_tensors='pt')[0]
-                    
-                    if verbose:
-                        logger.info(f"Token IDs shape: {token_ids.shape}")
-                        logger.info(f"Token IDs (first 20): {token_ids[:20].tolist()}")
-                        logger.info(f"Token IDs (last 20): {token_ids[-20:].tolist()}")
-                    
-                    # Extract activations using nnsight trace
-                    with model.trace(chat_formatted):
-                        layer_outputs = []
-                        
-                        if layer_idx is not None:
-                            # Extract single layer
-                            num_layers = len(model.model.layers)  # type: ignore[attr-defined]
-                            if layer_idx >= num_layers or layer_idx < 0:
-                                raise ValueError(f"layer_idx {layer_idx} is out of range. Model has {num_layers} layers (0-{num_layers-1})")
-                            layer_outputs.append(model.model.layers[layer_idx].output[0])  # type: ignore[attr-defined]
-                        else:
-                            # Extract all layers
-                            for layer in model.model.layers:  # type: ignore[attr-defined]
-                                layer_outputs.append(layer.output[0])
-                        
-                        # Stack: (num_layers, seq_len, d_model)
-                        activations = torch.stack(layer_outputs, dim=0)
-                        
-                        # Extract specified token position
-                        if token_pos is None:
-                            # Extract final content token (skip special tokens at the end)
-                            # Find the last non-special token by walking backwards
-                            actual_token_pos = find_last_content_token_position(token_ids, tokenizer)
-                            token_activations = activations[:, actual_token_pos, :]
-                        else:
-                            # Extract specific token position
-                            if token_pos >= activations.shape[1] or token_pos < -activations.shape[1]:
-                                raise ValueError(f"token_pos {token_pos} out of range for sequence length {activations.shape[1]}")
-                            token_activations = activations[:, token_pos, :]
-                            actual_token_pos = token_pos
-                        
-                        if verbose:
-                            logger.info(f"Full activations shape: {activations.shape}")
-                            logger.info(f"Extracted token activations shape: {token_activations.shape}")
-                            if token_pos is None:
-                                logger.info(f"Token position extracted: {actual_token_pos} (last content token, skipping special tokens)")
-                            else:
-                                logger.info(f"Token position extracted: {actual_token_pos}")
-                            # Show what token we're extracting
-                            if actual_token_pos < 0:
-                                token_idx = len(token_ids) + actual_token_pos
-                            else:
-                                token_idx = actual_token_pos
-                            if 0 <= token_idx < len(token_ids):
-                                extracted_token_id = token_ids[token_idx].item()
-                                try:
-                                    extracted_token_text = tokenizer.decode([extracted_token_id])
-                                    logger.info(f"Extracted token ID: {extracted_token_id}, decoded: {repr(extracted_token_text)}")
-                                except Exception:
-                                    logger.info(f"Extracted token ID: {extracted_token_id} (could not decode)")
-                        
-                        # Move to CPU and add to save queue
-                        token_ids_cpu = token_ids.cpu()
-                        activations_cpu = token_activations.cpu()
-                        save_path = Path(activations_dir) / f"sentence_{sentence_index}.pt"
-                        
-                        # Put in queue for background saving as tuple (token_ids, activations)
-                        save_queue.put((save_path, token_ids_cpu, activations_cpu))
-                        logger.info(f"Queued activations for sentence {sentence_index}")
-                    
-                except Exception as e:
-                    logger.error(f"Error on sentence {sentence_index}: {e}")
-                    import traceback
-                    if verbose:
-                        traceback.print_exc()
-                    gc.collect()
-                    torch.cuda.empty_cache()
-                    continue
+    # Find where assistant content starts
+    assistant_start = full_formatted.find(full_rollout_text)
+    if assistant_start == -1:
+        raise ValueError("Could not find rollout text in formatted string")
+    
+    # Pre-compute cumulative sentence lengths for position calculation
+    cumulative_lens = [0]
+    for sent in sentences:
+        cumulative_lens.append(cumulative_lens[-1] + len(sent))
+    
+    # Build map: sentence_index -> token position of period
+    special_ids = set(tokenizer.all_special_ids)
+    
+    def find_content_positions(sentence_idx: int) -> List[int]:
+        """Find last N content token positions for a sentence."""
+        sent = sentences[sentence_idx]
         
-        # Wait for all saves to complete
-        save_queue.join()
-        logger.info("All activations processed and queued for saving")
+        # Find the period position in this sentence
+        period_pos = sent.rfind('.')
+        if period_pos == -1:
+            period_pos = len(sent.rstrip()) - 1
         
-    finally:
-        # Stop the save worker thread
-        save_queue.put(None)  # Sentinel to stop worker
-        save_thread.join()
+        # Map to position in full formatted string
+        target_char = assistant_start + cumulative_lens[sentence_idx] + period_pos
+        
+        # Find token containing this character
+        token_pos = None
+        for tok_idx, (start, end) in enumerate(offset_mapping):
+            if start <= target_char < end:
+                token_pos = tok_idx
+                break
+        
+        if token_pos is None:
+            logger.warning(f"Could not find token for sentence {sentence_idx}, using fallback")
+            token_pos = len(full_tokens) - 2
+        
+        # Walk backwards to get last N content tokens
+        positions = []
+        for pos in range(token_pos, -1, -1):
+            if full_tokens[pos].item() not in special_ids:
+                positions.append(pos)
+                if len(positions) >= num_tokens:
+                    break
+        positions.reverse()
+        return positions if positions else [token_pos]
+    
+    # Run SINGLE forward pass on full rollout
+    logger.info("Running single forward pass on full rollout...")
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    # nnsight requires .save() to access tensors outside the trace context
+    saved_outputs = []
+    with torch.no_grad():
+        with model.trace(full_formatted):
+            if layer_idx is not None:
+                num_layers_model = len(model.model.layers)
+                if layer_idx >= num_layers_model or layer_idx < 0:
+                    raise ValueError(f"layer_idx {layer_idx} out of range [0, {num_layers_model})")
+                saved_outputs.append(model.model.layers[layer_idx].output[0].save())
+            else:
+                for layer in model.model.layers:
+                    saved_outputs.append(layer.output[0].save())
+    
+    # Stack saved outputs (they are now accessible after trace completes)
+    layer_tensors = [out for out in saved_outputs]
+    all_activations = torch.stack(layer_tensors, dim=0).cpu()
+    
+    logger.info(f"Activations shape: {all_activations.shape}")
+    
+    # Extract and save activations for each sentence
+    for sentence_data in sentences_to_process:
+        sentence_idx = sentence_data.get("sentence_index", sentence_indices[0])
+        
+        if sentence_idx >= len(sentences):
+            logger.warning(f"Sentence index {sentence_idx} >= {len(sentences)}, skipping")
+            continue
+        
+        content_positions = find_content_positions(sentence_idx)
+        
+        # Extract and average activations at these positions
+        token_acts = all_activations[:, content_positions, :]
+        
+        if verbose:
+            tokens_text = [tokenizer.decode([full_tokens[p].item()]) for p in content_positions]
+            logger.info(f"Sentence {sentence_idx}: positions {content_positions}, tokens {tokens_text}")
+        
+        # Save
+        save_path = Path(activations_dir) / f"sentence_{sentence_idx}.pt"
+        torch.save((full_tokens.cpu(), token_acts), save_path)
+        logger.info(f"Saved sentence {sentence_idx}")
     
     logger.info("Activation storage complete!")
 

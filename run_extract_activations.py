@@ -47,6 +47,7 @@ DTYPE = "bfloat16"  # Data type: "bfloat16", "float16", or "float32"
 # Extraction parameters
 LAYER_IDX = None  # Specific layer index to extract (None = all layers)
 TOKEN_POSITION = "final"  # Which token to extract: "final" (last content token) or integer index
+NUM_TOKENS = 5  # Number of final content tokens to extract (only used when TOKEN_POSITION="final")
 START_IDX = 0  # Starting sentence index (0 = first sentence)
 END_IDX = None  # Ending sentence index (None = all sentences)
 
@@ -168,6 +169,7 @@ def process_rollout_file(
     end_idx: int,
     layer_idx: int,
     token_position: str,
+    num_tokens: int,
     verbose: bool,
     skip_if_exists: bool
 ) -> bool:
@@ -220,6 +222,7 @@ def process_rollout_file(
             end_idx=end_idx,
             layer_idx=layer_idx,
             token_position=token_position,
+            num_tokens=num_tokens,
             verbose=verbose,
             full_rollout_text=full_rollout_text
         )
@@ -256,6 +259,7 @@ def main():
     print(f"  Model: {MODEL_NAME}")
     print(f"  Layer index: {LAYER_IDX if LAYER_IDX is not None else 'all'}")
     print(f"  Token position: {TOKEN_POSITION}")
+    print(f"  Num tokens to extract: {NUM_TOKENS}")
     print(f"  Start index: {START_IDX}")
     print(f"  End index: {END_IDX if END_IDX is not None else 'all'}")
     print(f"  Verbose: {VERBOSE}")
@@ -310,6 +314,7 @@ def main():
             end_idx=END_IDX,
             layer_idx=LAYER_IDX,
             token_position=TOKEN_POSITION,
+            num_tokens=NUM_TOKENS,
             verbose=VERBOSE,
             skip_if_exists=SKIP_IF_EXISTS
         )
@@ -329,8 +334,8 @@ def main():
     print(f"\nActivations saved to: {OUTPUT_DIR}/<prompt_name>/")
     print(f"\nTo load activations:")
     print(f"  token_ids, activations = torch.load('{OUTPUT_DIR}/<prompt_name>/sentence_0.pt')")
-    print(f"\nActivations shape: (num_layers, hidden_dim)")
-    print(f"  Example: (24, 2880) for 24 layers with 2880 hidden dimensions")
+    print(f"\nActivations shape: (num_layers, num_tokens, hidden_dim)")
+    print(f"  Example: (24, {NUM_TOKENS}, 2880) for 24 layers, {NUM_TOKENS} tokens, 2880 hidden dimensions")
     print()
 
 

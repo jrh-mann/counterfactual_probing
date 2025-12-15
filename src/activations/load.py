@@ -7,6 +7,7 @@ Designed for use in Jupyter notebooks.
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import torch
 import numpy as np
 
@@ -21,7 +22,8 @@ def load_single_activation(activation_path: Path) -> Tuple[torch.Tensor, torch.T
     Returns:
         Tuple of (token_ids, activations)
         - token_ids: 1D tensor of token IDs
-        - activations: 2D tensor of shape (num_layers, hidden_dim)
+        - activations: 2D tensor of shape (num_layers, hidden_dim) or 
+                      3D tensor of shape (num_layers, num_tokens, hidden_dim)
     """
     data = torch.load(activation_path, map_location='cpu')
     if not isinstance(data, tuple) or len(data) != 2:
@@ -262,22 +264,44 @@ def stack_activations_by_layer(
     
     # Get first activation to determine shape
     first_activation = activations_dict[sorted_keys[0]]
-    num_layers, hidden_dim = first_activation.shape
+    first_shape = first_activation.shape
+    
+    # Handle both 2D (old format) and 3D (new format) activations
+    if len(first_shape) == 2:
+        # Old format: (num_layers, hidden_dim)
+        num_layers, hidden_dim = first_shape
+        has_tokens = False
+    elif len(first_shape) == 3:
+        # New format: (num_layers, num_tokens, hidden_dim)
+        num_layers, num_tokens, hidden_dim = first_shape
+        has_tokens = True
+    else:
+        raise ValueError(f"Unexpected activation shape: {first_shape}. Expected 2D or 3D.")
     
     if layer_idx is not None:
         if layer_idx < 0 or layer_idx >= num_layers:
             raise ValueError(f"layer_idx {layer_idx} out of range [0, {num_layers})")
-        stacked = np.stack([
-            activations_dict[key][layer_idx].float().numpy() 
-            for key in sorted_keys
-        ])
-        return stacked  # (num_sentences, hidden_dim)
+        if has_tokens:
+            stacked = np.stack([
+                activations_dict[key][layer_idx].float().numpy() 
+                for key in sorted_keys
+            ])
+            return stacked  # (num_sentences, num_tokens, hidden_dim)
+        else:
+            stacked = np.stack([
+                activations_dict[key][layer_idx].float().numpy() 
+                for key in sorted_keys
+            ])
+            return stacked  # (num_sentences, hidden_dim)
     else:
         stacked = np.stack([
             activations_dict[key].float().numpy() 
             for key in sorted_keys
         ])
-        return stacked  # (num_sentences, num_layers, hidden_dim)
+        if has_tokens:
+            return stacked  # (num_sentences, num_layers, num_tokens, hidden_dim)
+        else:
+            return stacked  # (num_sentences, num_layers, hidden_dim)
 
 
 def get_activation_matrix(
@@ -473,25 +497,15 @@ def get_reward_hacking_labels(
     return np.array(labels)
 
 
-# Convenience function for notebook use
-def quick_load(
+# Convenience function for notebook use (legacy - uses slow sequential loading)
+def quick_load_legacy(
     base_dir: str = "/workspace",
     include_token_ids: bool = False,
     layer_idx: Optional[int] = None
 ) -> Tuple[np.ndarray, List[Dict[str, Any]], np.ndarray]:
     """
-    Quick load function for notebook analysis.
-    
-    Args:
-        base_dir: Base directory containing prompt subdirectories
-        include_token_ids: Whether to include token_ids (not used in quick_load)
-        layer_idx: Specific layer to extract (None = all layers)
-        
-    Returns:
-        Tuple of (activations, metadata, labels)
-        - activations: (total_sentences, num_layers, hidden_dim) or (total_sentences, hidden_dim)
-        - metadata: List of metadata dicts
-        - labels: (total_sentences,) array of p_reward_hacks values
+    Legacy quick load function (slow, sequential).
+    Use quick_load() instead for fast parallel loading.
     """
     base_path = Path(base_dir)
     all_activations = load_all_activations(base_path, include_token_ids=include_token_ids)
@@ -500,4 +514,216 @@ def quick_load(
     labels = get_reward_hacking_labels(all_activations)
     
     return activations, metadata, labels
+
+
+def quick_load(
+    base_dir: str = "/workspace",
+    layer_idx: Optional[int] = None,
+    cache_file: Optional[str] = None,
+    num_workers: int = 32,
+    include_token_ids: bool = False,  # Kept for API compatibility, ignored
+    verbose: bool = True
+) -> Tuple[np.ndarray, List[Dict[str, Any]], np.ndarray]:
+    """
+    Fast parallel loading with optional caching.
+    
+    Optimizations:
+    1. Parallel file loading with ThreadPoolExecutor
+    2. Skip token_ids (not needed for probing)
+    3. Memory-mapped loading where supported
+    4. Cache to single .npz file for instant reload
+    
+    Args:
+        base_dir: Base directory containing prompt subdirectories
+        layer_idx: Specific layer to extract (None = all layers)
+        cache_file: Path to cache file (.npz). If exists, loads from cache.
+                   If None, uses default cache at {base_dir}/_activation_cache.npz
+        num_workers: Number of parallel workers for loading
+        include_token_ids: Ignored (kept for API compatibility)
+        verbose: Print progress messages
+        
+    Returns:
+        Tuple of (activations, metadata, labels)
+        - activations: (total_sentences, num_layers, hidden_dim) or (total_sentences, hidden_dim)
+        - metadata: List of metadata dicts
+        - labels: (total_sentences,) array of p_reward_hacks values
+    """
+    base_path = Path(base_dir)
+    
+    # Default cache location
+    if cache_file is None:
+        cache_file = str(base_path / "_activation_cache.npz")
+    
+    # Check cache first
+    if Path(cache_file).exists():
+        if verbose:
+            print(f"Loading from cache: {cache_file}")
+        data = np.load(cache_file, allow_pickle=True)
+        activations = data['activations']
+        metadata = data['metadata'].tolist()
+        labels = data['labels']
+        
+        # Apply layer selection if needed
+        if layer_idx is not None and len(activations.shape) == 3:
+            activations = activations[:, layer_idx, :]
+        
+        if verbose:
+            print(f"Loaded {activations.shape[0]} samples")
+        return activations, metadata, labels
+    
+    # Discover all activation files and their metadata
+    if verbose:
+        print("Discovering files...")
+    all_files = []  # List of (pt_file, metadata_entry, prompt_name, rollout_idx)
+    
+    for prompt_dir in sorted(base_path.iterdir()):
+        if not prompt_dir.is_dir():
+            continue
+        
+        # Check for rollout subdirectories
+        rollout_dirs = sorted([d for d in prompt_dir.iterdir() 
+                               if d.is_dir() and d.name.startswith('rollout_')])
+        
+        if rollout_dirs:
+            for rollout_dir in rollout_dirs:
+                metadata_path = rollout_dir / "metadata.json"
+                if metadata_path.exists():
+                    with open(metadata_path) as f:
+                        metadata = json.load(f)
+                    try:
+                        rollout_idx = int(rollout_dir.name.split('_')[1])
+                    except (ValueError, IndexError):
+                        rollout_idx = 0
+                    
+                    for s in metadata.get('sentence_data', []):
+                        sent_idx = s.get('sentence_index')
+                        if sent_idx is not None:
+                            pt_file = rollout_dir / f"sentence_{sent_idx}.pt"
+                            if pt_file.exists():
+                                all_files.append((pt_file, s, prompt_dir.name, rollout_idx))
+        else:
+            # Flat structure
+            metadata_path = prompt_dir / "metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path) as f:
+                    metadata = json.load(f)
+                
+                for s in metadata.get('sentence_data', []):
+                    sent_idx = s.get('sentence_index')
+                    if sent_idx is not None:
+                        pt_file = prompt_dir / f"sentence_{sent_idx}.pt"
+                        if pt_file.exists():
+                            all_files.append((pt_file, s, prompt_dir.name, 0))
+    
+    if verbose:
+        print(f"Found {len(all_files)} activation files")
+    
+    if not all_files:
+        raise ValueError(f"No activation files found in {base_dir}")
+    
+    # Parallel load function
+    def load_one(item):
+        pt_file, meta, prompt_name, rollout_idx = item
+        try:
+            # Try memory-mapped loading first (PyTorch 2.1+)
+            try:
+                data = torch.load(pt_file, map_location='cpu', weights_only=True, mmap=True)
+            except TypeError:
+                # Older PyTorch without mmap/weights_only support
+                try:
+                    data = torch.load(pt_file, map_location='cpu', weights_only=True)
+                except TypeError:
+                    data = torch.load(pt_file, map_location='cpu')
+            
+            if isinstance(data, tuple):
+                _, activations = data
+            else:
+                activations = data
+            
+            return {
+                'activations': activations.float().numpy(),
+                'prompt_name': prompt_name,
+                'sentence_index': meta['sentence_index'],
+                'sentence': meta.get('sentence', ''),
+                'p_reward_hacks': meta.get('p_reward_hacks', 0.0),
+                'rollout_idx': rollout_idx
+            }
+        except Exception as e:
+            if verbose:
+                print(f"Error loading {pt_file}: {e}")
+            return None
+    
+    # Parallel loading
+    if verbose:
+        print(f"Loading with {num_workers} workers...")
+    results = []
+    
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(load_one, item): i for i, item in enumerate(all_files)}
+        
+        loaded = 0
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                results.append(result)
+            
+            loaded += 1
+            if verbose and loaded % 500 == 0:
+                print(f"  Loaded {loaded}/{len(all_files)}")
+    
+    if verbose:
+        print(f"Loaded {len(results)} activations")
+    
+    if not results:
+        raise ValueError("No activations could be loaded")
+    
+    # Sort by (prompt_name, rollout_idx, sentence_index)
+    results.sort(key=lambda x: (x['prompt_name'], x['rollout_idx'], x['sentence_index']))
+    
+    # Stack into arrays
+    activations = np.stack([r['activations'] for r in results])
+    labels = np.array([r['p_reward_hacks'] for r in results])
+    metadata = [{k: v for k, v in r.items() if k != 'activations'} for r in results]
+    
+    if verbose:
+        print(f"Stacked shape: {activations.shape}")
+    
+    # Cache for next time (before layer selection)
+    if cache_file:
+        if verbose:
+            print(f"Saving cache to: {cache_file}")
+        np.savez(cache_file, 
+                 activations=activations, 
+                 metadata=np.array(metadata, dtype=object), 
+                 labels=labels)
+    
+    # Select layer if specified
+    if layer_idx is not None:
+        if len(activations.shape) == 4:
+            # New format: (num_samples, num_layers, num_tokens, hidden_dim)
+            if layer_idx < 0 or layer_idx >= activations.shape[1]:
+                raise ValueError(f"layer_idx {layer_idx} out of range [0, {activations.shape[1]})")
+            activations = activations[:, layer_idx, :, :]  # (num_samples, num_tokens, hidden_dim)
+        elif len(activations.shape) == 3:
+            # Old format: (num_samples, num_layers, hidden_dim)
+            if layer_idx < 0 or layer_idx >= activations.shape[1]:
+                raise ValueError(f"layer_idx {layer_idx} out of range [0, {activations.shape[1]})")
+            activations = activations[:, layer_idx, :]  # (num_samples, hidden_dim)
+        else:
+            raise ValueError(f"Unexpected activations shape: {activations.shape}")
+    
+    return activations, metadata, labels
+
+
+def clear_cache(base_dir: str = "/workspace", cache_file: Optional[str] = None) -> None:
+    """Clear the activation cache file."""
+    if cache_file is None:
+        cache_file = str(Path(base_dir) / "_activation_cache.npz")
+    
+    cache_path = Path(cache_file)
+    if cache_path.exists():
+        cache_path.unlink()
+        print(f"Deleted cache: {cache_file}")
+    else:
+        print(f"No cache found at: {cache_file}")
 
