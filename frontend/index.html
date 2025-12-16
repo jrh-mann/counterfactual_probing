@@ -172,9 +172,32 @@
 
         #prob-chart {
             width: 100%;
-            height: 120px;
+            height: 200px;
             border-radius: 6px;
             background: #111;
+        }
+        
+        .layer-selector-container {
+            margin-bottom: 20px;
+        }
+        
+        .layer-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .layer-checkbox input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        
+        .layer-checkbox label {
+            color: #ccc;
+            font-size: 0.85rem;
+            cursor: pointer;
+            user-select: none;
         }
 
         .legend {
@@ -339,6 +362,10 @@
         <header>
             <h1>Probe Visualization Dashboard</h1>
             <p class="subtitle">Visualize per-token reward hacking probe activations</p>
+            <div style="margin-top: 15px;">
+                <a href="/generate" style="color: #5a9cf5; text-decoration: none; font-size: 0.9rem; margin-right: 20px;">Generate & Probe</a>
+                <a href="/compare" style="color: #5a9cf5; text-decoration: none; font-size: 0.9rem;">Compare Trajectories</a>
+            </div>
         </header>
 
         <div class="controls">
@@ -351,6 +378,11 @@
                 <span class="rh-label">Ground Truth:</span>
                 <span class="rh-badge" id="rh-badge"></span>
             </div>
+        </div>
+        
+        <div class="layer-selector-container" id="layer-selector-container" style="display: none;">
+            <label style="color: #ccc; font-size: 0.9rem; font-weight: 500; margin-bottom: 8px; display: block;">Select Layers:</label>
+            <div id="layer-checkboxes" style="display: flex; flex-wrap: wrap; gap: 10px; padding: 15px; background: #1a1a1a; border-radius: 8px; margin-bottom: 20px;"></div>
         </div>
         
         <div class="chart-container" id="chart-container" style="display: none;">
@@ -396,6 +428,60 @@
         const chartContainer = document.getElementById('chart-container');
         const chartCanvas = document.getElementById('prob-chart');
         const chartStats = document.getElementById('chart-stats');
+        const layerSelectorContainer = document.getElementById('layer-selector-container');
+        const layerCheckboxes = document.getElementById('layer-checkboxes');
+        
+        let numLayers = 24;  // Default, will be loaded from API
+        let selectedLayers = [];  // Array of selected layer indices
+        let layerProbabilities = [];  // Store per-layer probabilities from API
+
+        // Load number of layers and create checkboxes
+        async function loadNumLayers() {
+            try {
+                const response = await fetch('/api/num_layers');
+                const data = await response.json();
+                numLayers = data.num_layers;
+                
+                // Create checkboxes for all layers (all selected by default)
+                layerCheckboxes.innerHTML = '';
+                selectedLayers = Array.from({length: numLayers}, (_, i) => i);
+                
+                for (let i = 0; i < numLayers; i++) {
+                    const checkboxDiv = document.createElement('div');
+                    checkboxDiv.className = 'layer-checkbox';
+                    
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.id = `layer-${i}`;
+                    checkbox.value = i;
+                    checkbox.checked = true;
+                    checkbox.addEventListener('change', updateSelectedLayers);
+                    
+                    const label = document.createElement('label');
+                    label.htmlFor = `layer-${i}`;
+                    label.textContent = `Layer ${i}`;
+                    
+                    checkboxDiv.appendChild(checkbox);
+                    checkboxDiv.appendChild(label);
+                    layerCheckboxes.appendChild(checkboxDiv);
+                }
+                
+                layerSelectorContainer.style.display = 'block';
+            } catch (error) {
+                console.error('Failed to load num_layers:', error);
+            }
+        }
+        
+        function updateSelectedLayers() {
+            selectedLayers = Array.from(layerCheckboxes.querySelectorAll('input[type="checkbox"]:checked'))
+                .map(cb => parseInt(cb.value))
+                .sort((a, b) => a - b);
+            
+            // Redraw chart if we have data
+            if (layerProbabilities.length > 0) {
+                drawChart(layerProbabilities);
+            }
+        }
 
         // Fetch available rollouts on page load
         async function loadRollouts() {
@@ -590,11 +676,11 @@
             tooltip.style.display = 'none';
         }
 
-        // Draw probability chart
-        function drawChart(tokens) {
+        // Draw probability chart with multiple layers
+        function drawChart(layerProbsData) {
             const ctx = chartCanvas.getContext('2d');
             const width = chartCanvas.width = chartCanvas.offsetWidth * 2;  // Retina
-            const height = chartCanvas.height = 240;  // Retina
+            const height = chartCanvas.height = 400;  // Retina (increased for multiple lines)
             
             ctx.scale(2, 2);  // Retina scaling
             const w = width / 2;
@@ -604,17 +690,22 @@
             ctx.fillStyle = '#111';
             ctx.fillRect(0, 0, w, h);
             
-            if (tokens.length === 0) return;
+            if (!layerProbsData || layerProbsData.length === 0) return;
             
-            const probs = tokens.map(t => t.probability);
-            const maxProb = Math.max(...probs);
-            const minProb = Math.min(...probs);
-            const avgProb = probs.reduce((a, b) => a + b, 0) / probs.length;
+            // Filter to only selected layers
+            const selectedLayerData = layerProbsData.filter(lp => selectedLayers.includes(lp.layer_index));
+            if (selectedLayerData.length === 0) return;
+            
+            // Get all probabilities for stats
+            const allProbs = selectedLayerData.flatMap(lp => lp.probabilities);
+            const maxProb = Math.max(...allProbs);
+            const minProb = Math.min(...allProbs);
+            const avgProb = allProbs.reduce((a, b) => a + b, 0) / allProbs.length;
             
             // Update stats
-            chartStats.textContent = `Min: ${(minProb * 100).toFixed(1)}% · Avg: ${(avgProb * 100).toFixed(1)}% · Max: ${(maxProb * 100).toFixed(1)}%`;
+            chartStats.textContent = `${selectedLayerData.length} layer(s) · Min: ${(minProb * 100).toFixed(1)}% · Avg: ${(avgProb * 100).toFixed(1)}% · Max: ${(maxProb * 100).toFixed(1)}%`;
             
-            const padding = { top: 10, right: 10, bottom: 20, left: 40 };
+            const padding = { top: 20, right: 10, bottom: 30, left: 40 };
             const chartW = w - padding.left - padding.right;
             const chartH = h - padding.top - padding.bottom;
             
@@ -639,44 +730,66 @@
                 ctx.fillText(`${val}%`, padding.left - 5, y + 3);
             }
             
-            // Draw probability line
-            ctx.beginPath();
-            ctx.strokeStyle = '#5a9cf5';
-            ctx.lineWidth = 1.5;
+            // Color palette for layers
+            const colors = [
+                '#5a9cf5', '#f55a5a', '#5af5a9', '#f5a95a', '#a95af5',
+                '#5af5f5', '#f55af5', '#f5f55a', '#5a5af5', '#f55a5a'
+            ];
             
-            for (let i = 0; i < probs.length; i++) {
-                const x = padding.left + (i / (probs.length - 1)) * chartW;
-                const y = padding.top + (1 - probs[i]) * chartH;
+            // Draw each layer's line
+            selectedLayerData.forEach((layerData, idx) => {
+                const probs = layerData.probabilities;
+                const color = colors[layerData.layer_index % colors.length];
+                const alpha = selectedLayerData.length > 1 ? 0.7 : 1.0;
                 
-                if (i === 0) {
-                    ctx.moveTo(x, y);
-                } else {
-                    ctx.lineTo(x, y);
-                }
-            }
-            ctx.stroke();
-            
-            // Draw filled area with gradient
-            ctx.beginPath();
-            for (let i = 0; i < probs.length; i++) {
-                const x = padding.left + (i / (probs.length - 1)) * chartW;
-                const y = padding.top + (1 - probs[i]) * chartH;
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = selectedLayerData.length === 1 ? 2 : 1.5;
+                ctx.globalAlpha = alpha;
                 
-                if (i === 0) {
-                    ctx.moveTo(x, y);
-                } else {
-                    ctx.lineTo(x, y);
+                for (let i = 0; i < probs.length; i++) {
+                    const x = padding.left + (i / Math.max(probs.length - 1, 1)) * chartW;
+                    const y = padding.top + (1 - probs[i]) * chartH;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
                 }
-            }
-            ctx.lineTo(padding.left + chartW, padding.top + chartH);
-            ctx.lineTo(padding.left, padding.top + chartH);
-            ctx.closePath();
+                ctx.stroke();
+            });
             
-            const gradient = ctx.createLinearGradient(0, padding.top, 0, padding.top + chartH);
-            gradient.addColorStop(0, 'rgba(90, 156, 245, 0.3)');
-            gradient.addColorStop(1, 'rgba(90, 156, 245, 0.05)');
-            ctx.fillStyle = gradient;
-            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            
+            // Draw mean line if multiple layers
+            if (selectedLayerData.length > 1) {
+                const meanProbs = [];
+                const maxLen = Math.max(...selectedLayerData.map(lp => lp.probabilities.length));
+                for (let i = 0; i < maxLen; i++) {
+                    const sum = selectedLayerData.reduce((acc, lp) => acc + (lp.probabilities[i] || 0), 0);
+                    const count = selectedLayerData.filter(lp => i < lp.probabilities.length).length;
+                    meanProbs.push(sum / count);
+                }
+                
+                ctx.beginPath();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                
+                for (let i = 0; i < meanProbs.length; i++) {
+                    const x = padding.left + (i / Math.max(meanProbs.length - 1, 1)) * chartW;
+                    const y = padding.top + (1 - meanProbs[i]) * chartH;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
         }
 
         // Update RH indicator
@@ -703,7 +816,10 @@
                 const response = await fetch('/api/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ rollout_file: rolloutFile })
+                    body: JSON.stringify({ 
+                        rollout_file: rolloutFile,
+                        layer_indices: selectedLayers.length > 0 ? selectedLayers : null
+                    })
                 });
 
                 if (!response.ok) {
@@ -713,14 +829,17 @@
 
                 const result = await response.json();
                 
+                // Store layer probabilities
+                layerProbabilities = result.layer_probabilities || [];
+                
                 // Update RH indicator (based on expected.json in completion)
                 updateRHIndicator(result.is_reward_hacking);
                 
-                // Draw chart
+                // Draw chart with layer data
                 chartContainer.style.display = 'block';
-                drawChart(result.tokens);
+                drawChart(layerProbabilities);
                 
-                // Render tokens
+                // Render tokens (colored by mean over selected layers)
                 renderTokens(result.tokens);
                 showStatus(`Analyzed ${result.tokens.length} tokens`, 'success');
                 
@@ -737,6 +856,7 @@
 
         // Initialize
         loadRollouts();
+        loadNumLayers();
     </script>
 </body>
 </html>

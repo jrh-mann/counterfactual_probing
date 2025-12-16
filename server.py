@@ -9,6 +9,7 @@ Then open http://localhost:8080 in your browser.
 import json
 import re
 import torch
+import numpy as np
 import nnsight
 from pathlib import Path
 from typing import List, Dict, Any
@@ -39,7 +40,8 @@ def detect_reward_hacking(text: str) -> bool:
 # Configuration
 # ============================================================================
 
-PROBE_WEIGHTS_PATH = "probe_weights.pt"
+RIDGE_WEIGHTS_PATH = "probes/weights_ridge.pt"
+RIDGE_BIASES_PATH = "probes/biases_ridge.pt"
 ROLLOUTS_DIR = "src/rollouts"
 MODEL_NAME = "openai/gpt-oss-20b"
 DEVICE_MAP = "auto"
@@ -59,6 +61,7 @@ probe_data = None
 
 class AnalyzeRequest(BaseModel):
     rollout_file: str
+    layer_indices: List[int] = None  # None = all layers, otherwise list of layer indices
 
 
 class TokenData(BaseModel):
@@ -74,12 +77,31 @@ class SentenceInfo(BaseModel):
     p_reward_hacks: float
 
 
+class LayerProbabilities(BaseModel):
+    layer_index: int
+    probabilities: List[float]  # Per-token probabilities for this layer
+
 class AnalyzeResponse(BaseModel):
     tokens: List[TokenData]
     full_text: str
     rollout_file: str
     ground_truth_sentences: List[SentenceInfo]  # Ground truth from rollout data
     is_reward_hacking: bool  # True if max p_reward_hacks > 0.5
+    layer_probabilities: List[LayerProbabilities]  # Per-layer probabilities for selected layers
+
+
+class GenerateRequest(BaseModel):
+    prompt: str  # User prompt text
+    system_message: str = ""  # Optional system message
+    temperature: float = 0.7
+    max_tokens: int = 2000
+
+
+class GenerateResponse(BaseModel):
+    tokens: List[TokenData]
+    full_text: str
+    is_reward_hacking: bool
+    layer_probabilities: List[LayerProbabilities] = []  # Per-layer probabilities
 
 
 # ============================================================================
@@ -94,24 +116,38 @@ async def startup_event():
     print("PROBE VISUALIZATION SERVER STARTING")
     print("=" * 60)
     
-    # Load probe weights
-    print(f"\nLoading probe weights from: {PROBE_WEIGHTS_PATH}")
-    if not Path(PROBE_WEIGHTS_PATH).exists():
-        raise RuntimeError(f"Probe weights not found at {PROBE_WEIGHTS_PATH}. "
-                          "Run the notebook cell to save probe_weights.pt first.")
+    # Load Ridge weights and biases
+    print(f"\nLoading Ridge weights from: {RIDGE_WEIGHTS_PATH}, {RIDGE_BIASES_PATH}")
+    if not Path(RIDGE_WEIGHTS_PATH).exists():
+        raise RuntimeError(f"Ridge weights not found at {RIDGE_WEIGHTS_PATH}. "
+                          "Run the notebook cell to save weights_ridge.pt first.")
+    if not Path(RIDGE_BIASES_PATH).exists():
+        raise RuntimeError(f"Ridge biases not found at {RIDGE_BIASES_PATH}. "
+                          "Run the notebook cell to save biases_ridge.pt first.")
     
-    probe_data = torch.load(PROBE_WEIGHTS_PATH, map_location='cpu')
-    print(f"  act_mean shape: {probe_data['act_mean'].shape}")
-    print(f"  act_std shape: {probe_data['act_std'].shape}")
-    print(f"  weights shape: {probe_data['weights'].shape}")
-    print(f"  biases shape: {probe_data['biases'].shape}")
+    weights_ridge = torch.load(RIDGE_WEIGHTS_PATH, map_location='cuda', weights_only=False)
+    biases_ridge = torch.load(RIDGE_BIASES_PATH, map_location='cuda', weights_only=False)
+    
+    # Convert to torch tensors if they're numpy arrays
+    if isinstance(weights_ridge, np.ndarray):
+        weights_ridge = torch.from_numpy(weights_ridge)
+    if isinstance(biases_ridge, np.ndarray):
+        biases_ridge = torch.from_numpy(biases_ridge)
+    
+    print(f"  weights shape: {weights_ridge.shape}")
+    print(f"  biases shape: {biases_ridge.shape}")
     
     # Move probe data to GPU if available
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    probe_data['act_mean'] = probe_data['act_mean'].to(device).float()
-    probe_data['act_std'] = probe_data['act_std'].to(device).float()
-    probe_data['weights'] = probe_data['weights'].to(device).float()
-    probe_data['biases'] = probe_data['biases'].to(device).float()
+    weights_ridge = weights_ridge.to(device).float()
+    biases_ridge = biases_ridge.to(device).float()
+    
+    # Store in probe_data dict (no normalization)
+    probe_data = {
+        'weights': weights_ridge,
+        'biases': biases_ridge,
+        'num_layers': weights_ridge.shape[0]
+    }
     print(f"  Probe data moved to: {device}")
     
     # Load tokenizer
@@ -152,6 +188,15 @@ async def list_rollouts() -> List[str]:
     # Find all rollout JSON files
     rollout_files = sorted(rollouts_path.glob("*_rollouts.json"))
     return [f.name for f in rollout_files if not f.name.startswith('_')]
+
+
+@app.get("/api/num_layers")
+async def get_num_layers() -> Dict[str, int]:
+    """Get the number of layers in the model."""
+    global probe_data
+    if probe_data is None:
+        raise HTTPException(status_code=503, detail="Server not fully initialized")
+    return {"num_layers": probe_data['num_layers']}
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
@@ -230,31 +275,35 @@ async def analyze_rollout(request: AnalyzeRequest) -> AnalyzeResponse:
     all_activations = torch.stack([out.squeeze(0) for out in saved_outputs], dim=0)
     
     # Move to same device as probe data
-    device = probe_data['act_mean'].device
+    device = probe_data['weights'].device
     all_activations = all_activations.to(device).float()
     
     # Compute probe firing for each token position
     # all_activations: (num_layers, seq_len, hidden_dim)
     # We compute per-layer and then can aggregate
     
-    act_mean = probe_data['act_mean'].squeeze(0)  # (num_layers, hidden_dim)
-    act_std = probe_data['act_std'].squeeze(0)    # (num_layers, hidden_dim)
     weights = probe_data['weights']    # (num_layers, hidden_dim)
     biases = probe_data['biases']      # (num_layers,)
     
-    # Normalize and compute probe for each layer
-    # (num_layers, seq_len, hidden_dim) - (num_layers, 1, hidden_dim)
-    normalized = (all_activations - act_mean.unsqueeze(1)) / act_std.unsqueeze(1)
+    # Determine which layers to use
+    if request.layer_indices is None:
+        layer_indices = list(range(num_layers))
+    else:
+        # Validate layer indices
+        layer_indices = [l for l in request.layer_indices if 0 <= l < num_layers]
+        if not layer_indices:
+            raise HTTPException(status_code=400, detail=f"Invalid layer indices. Must be between 0 and {num_layers-1}")
     
+    # Compute probe directly (no normalization, no sigmoid)
     # Dot product with weights: (num_layers, seq_len, hidden_dim) @ (num_layers, hidden_dim, 1)
     # -> (num_layers, seq_len, 1) -> (num_layers, seq_len)
-    logits = torch.einsum('lsh,lh->ls', normalized, weights) + biases.unsqueeze(1)
+    logits_per_layer = torch.einsum('lsh,lh->ls', all_activations, weights) + biases.unsqueeze(1)
     
-    # Sigmoid to get probabilities: (num_layers, seq_len)
-    probs_per_layer = torch.sigmoid(logits)
+    # Get logits for selected layers only
+    selected_logits = logits_per_layer[layer_indices]  # (num_selected_layers, seq_len)
     
-    # Average across layers (or you could take max, or specific layer)
-    probs = probs_per_layer.mean(dim=0)  # (seq_len,)
+    # Average across selected layers for token coloring
+    probs = selected_logits.mean(dim=0)  # (seq_len,)
     
     # Build response - only include completion tokens (skip prompt)
     tokens_data = []
@@ -268,6 +317,15 @@ async def analyze_rollout(request: AnalyzeRequest) -> AnalyzeResponse:
             token_id=token_id,
             probability=prob,
             position=i  # Position within completion
+        ))
+    
+    # Build per-layer probabilities for selected layers
+    layer_probabilities = []
+    for layer_idx in layer_indices:
+        layer_probs = logits_per_layer[layer_idx, prompt_length:].tolist()
+        layer_probabilities.append(LayerProbabilities(
+            layer_index=layer_idx,
+            probabilities=layer_probs
         ))
     
     # Extract ground truth from sentence data
@@ -288,7 +346,8 @@ async def analyze_rollout(request: AnalyzeRequest) -> AnalyzeResponse:
         full_text=full_rollout_text,
         rollout_file=request.rollout_file,
         ground_truth_sentences=ground_truth_sentences,
-        is_reward_hacking=is_rh
+        is_reward_hacking=is_rh,
+        layer_probabilities=layer_probabilities
     )
 
 
@@ -400,19 +459,15 @@ async def compare_rollouts(request: CompareRequest) -> CompareResponse:
                         saved_outputs.append(layer.output[0].save())
             
             all_activations = torch.stack([out.squeeze(0) for out in saved_outputs], dim=0)
-            device = probe_data['act_mean'].device
+            device = probe_data['weights'].device
             all_activations = all_activations.to(device).float()
             
-            # Compute probe
-            act_mean = probe_data['act_mean']
-            act_std = probe_data['act_std']
+            # Compute probe (no normalization)
             weights = probe_data['weights']
             biases = probe_data['biases']
             
-            normalized = (all_activations - act_mean.unsqueeze(1)) / act_std.unsqueeze(1)
-            logits = torch.einsum('lsh,lh->ls', normalized, weights) + biases.unsqueeze(1)
-            probs_per_layer = torch.sigmoid(logits)
-            probs = probs_per_layer.mean(dim=0)
+            logits = torch.einsum('lsh,lh->ls', all_activations, weights) + biases.unsqueeze(1)
+            probs = logits.mean(dim=0)  # Use raw logits, no sigmoid
             
             # Get completion probs only
             completion_probs = probs[prompt_length:].tolist()
@@ -434,6 +489,171 @@ async def compare_rollouts(request: CompareRequest) -> CompareResponse:
     )
 
 
+@app.post("/api/generate", response_model=GenerateResponse)
+async def generate_and_analyze(request: GenerateRequest) -> GenerateResponse:
+    """
+    Generate a response from a prompt and analyze it with the probe.
+    """
+    global model, tokenizer, probe_data
+    
+    if model is None or tokenizer is None or probe_data is None:
+        raise HTTPException(status_code=503, detail="Server not fully initialized")
+    
+    # Build messages
+    messages = []
+    if request.system_message:
+        messages.append({"role": "system", "content": request.system_message})
+    messages.append({"role": "user", "content": request.prompt})
+    
+    # Format prompt with chat template
+    prompt_text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
+    
+    # Tokenize prompt
+    prompt_inputs = tokenizer(prompt_text, return_tensors='pt')
+    prompt_length = len(prompt_inputs['input_ids'][0])
+    
+    # Generate response using the underlying model
+    print(f"Generating response: {len(prompt_inputs['input_ids'][0])} prompt tokens, max_tokens={request.max_tokens}")
+    
+    with torch.no_grad():
+        # Generate using nnsight's generate method
+        with model.generate(prompt_text, max_new_tokens=request.max_tokens, temperature=request.temperature) as trace:
+            output = model.generator.output.save()
+        
+        # Get generated token IDs - nnsight's generate returns the full sequence
+        # Access the output properly - it's a saved tensor
+        generated_token_ids = output.value[0] if hasattr(output, 'value') else output[0]
+        
+        # Convert to list if tensor
+        if torch.is_tensor(generated_token_ids):
+            generated_token_ids = generated_token_ids.cpu().tolist()
+        elif isinstance(generated_token_ids, list):
+            pass  # Already a list
+        else:
+            # Try to convert to list
+            generated_token_ids = list(generated_token_ids)
+        
+        prompt_token_ids = tokenizer(prompt_text, return_tensors='pt')['input_ids'][0].tolist()
+        
+        # Extract only the newly generated tokens (after prompt)
+        if len(generated_token_ids) > len(prompt_token_ids):
+            new_token_ids = generated_token_ids[len(prompt_token_ids):]
+        else:
+            # If same length or shorter, assume all are new (shouldn't happen but handle gracefully)
+            new_token_ids = generated_token_ids
+        
+        generated_text = tokenizer.decode(new_token_ids, skip_special_tokens=False)
+        print(f"Generated {len(new_token_ids)} new tokens")
+        print(f"Generated text preview: {generated_text[:200] if len(generated_text) > 200 else generated_text}")
+        
+        if not generated_text or len(generated_text.strip()) == 0:
+            raise HTTPException(status_code=500, detail="Generated text is empty. Generation may have failed.")
+        
+        # Extract activations from full sequence using the token IDs directly
+        # nnsight's trace can accept token IDs directly
+        saved_outputs = []
+        with model.trace(generated_token_ids):
+            for layer in model.model.layers:
+                saved_outputs.append(layer.output[0].save())
+    
+    # Stack activations
+    all_activations = torch.stack([out.squeeze(0) for out in saved_outputs], dim=0)
+    device = probe_data['weights'].device
+    all_activations = all_activations.to(device).float()
+    
+    # Compute probe probabilities (no normalization)
+    weights = probe_data['weights']
+    biases = probe_data['biases']
+    
+    # Compute per-layer logits: (num_layers, seq_len)
+    logits_per_layer = torch.einsum('lsh,lh->ls', all_activations, weights) + biases.unsqueeze(1)
+    
+    # Use raw logits (no sigmoid)
+    probs_per_layer = logits_per_layer  # (num_layers, seq_len)
+    
+    # Average across all layers for token coloring
+    probs = probs_per_layer[17:18].mean(dim=0)  # (seq_len,)
+    
+    # Use the generated token IDs directly (already have them from generation)
+    if torch.is_tensor(generated_token_ids):
+        full_input_ids = generated_token_ids
+    else:
+        full_input_ids = torch.tensor(generated_token_ids)
+    
+    # Build response - only include completion tokens (skip prompt)
+    tokens_data = []
+    
+    print(f"Full sequence length: {len(full_input_ids)}, Prompt length: {prompt_length}")
+    print(f"Probs shape: {probs.shape}, Probs length: {len(probs)}")
+    
+    if prompt_length >= len(full_input_ids):
+        raise HTTPException(status_code=500, detail=f"Prompt length ({prompt_length}) >= full sequence length ({len(full_input_ids)})")
+    
+    if prompt_length >= len(probs):
+        raise HTTPException(status_code=500, detail=f"Prompt length ({prompt_length}) >= probabilities length ({len(probs)})")
+    
+    completion_token_ids = full_input_ids[prompt_length:].tolist()
+    completion_probs = probs[prompt_length:].tolist()
+    
+    print(f"Completion tokens: {len(completion_token_ids)}, Completion probs: {len(completion_probs)}")
+    
+    if len(completion_token_ids) != len(completion_probs):
+        # Handle mismatch - take the minimum length
+        min_len = min(len(completion_token_ids), len(completion_probs))
+        print(f"Length mismatch! Truncating to {min_len}")
+        completion_token_ids = completion_token_ids[:min_len]
+        completion_probs = completion_probs[:min_len]
+    
+    if len(completion_token_ids) == 0:
+        raise HTTPException(status_code=500, detail="No completion tokens found. Generation may have failed.")
+    
+    for i, (token_id, prob) in enumerate(zip(completion_token_ids, completion_probs)):
+        token_str = tokenizer.decode([token_id])
+        tokens_data.append(TokenData(
+            token=token_str,
+            token_id=token_id,
+            probability=float(prob),  # Ensure it's a Python float, not numpy
+            position=i
+        ))
+    
+    # Build per-layer probabilities for all layers (for frontend)
+    layer_probabilities = []
+    num_layers = probs_per_layer.shape[0]
+    for layer_idx in range(num_layers):
+        layer_probs = probs_per_layer[layer_idx, prompt_length:].tolist()
+        # Match length to tokens
+        if len(layer_probs) > len(completion_token_ids):
+            layer_probs = layer_probs[:len(completion_token_ids)]
+        elif len(layer_probs) < len(completion_token_ids):
+            # Pad with last value if shorter (shouldn't happen but handle gracefully)
+            last_val = layer_probs[-1] if layer_probs else 0.0
+            layer_probs.extend([last_val] * (len(completion_token_ids) - len(layer_probs)))
+        
+        # Convert to Python floats
+        layer_probs = [float(p) for p in layer_probs]
+        
+        layer_probabilities.append(LayerProbabilities(
+            layer_index=layer_idx,
+            probabilities=layer_probs
+        ))
+    
+    # Detect reward hacking
+    is_rh = detect_reward_hacking(generated_text)
+    
+    print(f"Generated {len(tokens_data)} tokens, RH detected: {is_rh}")
+    
+    return GenerateResponse(
+        tokens=tokens_data,
+        full_text=generated_text,
+        is_reward_hacking=is_rh,
+        layer_probabilities=layer_probabilities
+    )
+
+
 # ============================================================================
 # Static files (frontend)
 # ============================================================================
@@ -448,6 +668,12 @@ async def serve_frontend():
 async def serve_compare():
     """Serve the comparison page."""
     return FileResponse("frontend/compare.html")
+
+
+@app.get("/generate")
+async def serve_generate():
+    """Serve the generate page."""
+    return FileResponse("frontend/generate.html")
 
 
 # Mount static files for any additional assets

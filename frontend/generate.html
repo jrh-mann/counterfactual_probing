@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generate & Probe</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #333;
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+
+        .subtitle {
+            color: #888;
+            font-size: 0.95rem;
+        }
+
+        .nav {
+            margin-bottom: 20px;
+        }
+
+        .nav a {
+            color: #5a9cf5;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+
+        .nav a:hover {
+            text-decoration: underline;
+        }
+
+        .input-section {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            color: #ccc;
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 12px;
+            font-size: 0.95rem;
+            font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            resize: vertical;
+            min-height: 120px;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #5a9cf5;
+        }
+
+        .params-row {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .param-group {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        input[type="number"] {
+            width: 100%;
+            padding: 10px 12px;
+            font-size: 0.95rem;
+            border: 1px solid #444;
+            border-radius: 6px;
+            background: #0f0f0f;
+            color: #e0e0e0;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #5a9cf5;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 24px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #5a9cf5;
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #4a8ce5;
+        }
+
+        .btn-primary:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .status.loading {
+            background: #2a2a4a;
+            color: #8a8aff;
+        }
+
+        .status.error {
+            background: #4a2a2a;
+            color: #ff8a8a;
+        }
+
+        .status.success {
+            background: #2a4a2a;
+            color: #8aff8a;
+        }
+
+        .rh-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .rh-label {
+            color: #888;
+            font-size: 0.85rem;
+        }
+
+        .rh-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .rh-badge.safe {
+            background: hsl(120, 50%, 25%);
+            color: hsl(120, 70%, 70%);
+        }
+
+        .rh-badge.hacking {
+            background: hsl(0, 50%, 25%);
+            color: hsl(0, 70%, 70%);
+        }
+
+        .chart-container {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .chart-title {
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: #ccc;
+        }
+
+        .chart-stats {
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        #prob-chart {
+            width: 100%;
+            height: 120px;
+            border-radius: 6px;
+            background: #111;
+        }
+
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            display: none;
+        }
+
+        .legend-label {
+            color: #888;
+        }
+
+        .legend-bar {
+            width: 200px;
+            height: 20px;
+            border-radius: 4px;
+            background: linear-gradient(to right, 
+                hsl(120, 60%, 35%), 
+                hsl(60, 60%, 40%), 
+                hsl(30, 70%, 45%), 
+                hsl(0, 70%, 45%)
+            );
+        }
+
+        .tokens-container {
+            background: #1a1a1a;
+            border-radius: 12px;
+            padding: 25px;
+            min-height: 200px;
+            display: none;
+        }
+
+        .tokens-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+
+        .tokens-title {
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+
+        .token-count {
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        .tokens-display {
+            font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+            line-height: 1.8;
+            word-break: break-word;
+        }
+
+        .token {
+            display: inline;
+            padding: 3px 0;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            position: relative;
+        }
+
+        .token:hover {
+            filter: brightness(1.3);
+            text-decoration: underline;
+            text-decoration-thickness: 2px;
+        }
+
+        .token.space {
+            background: transparent !important;
+            color: inherit !important;
+        }
+
+        .token.newline {
+            display: block;
+            height: 0.5em;
+            background: transparent !important;
+        }
+
+        .token.newline + .token.newline {
+            height: 0.3em;
+        }
+
+        .token.special {
+            opacity: 0.6;
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            border: 1px dashed #555;
+            margin: 0 2px;
+            vertical-align: middle;
+        }
+
+        .token-tooltip {
+            position: fixed;
+            background: #252525;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 0.85rem;
+            pointer-events: none;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+            max-width: 320px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .token-tooltip .prob {
+            font-weight: 700;
+            font-size: 1.4rem;
+            margin-bottom: 8px;
+            font-family: 'SF Mono', 'Consolas', monospace;
+        }
+
+        .token-tooltip .token-preview {
+            background: #333;
+            padding: 6px 10px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            font-family: 'SF Mono', 'Consolas', monospace;
+            word-break: break-all;
+        }
+
+        .token-tooltip .details {
+            color: #999;
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="nav">
+            <a href="/">← Back to Rollout Viewer</a>
+            <span style="color: #666; margin: 0 10px;">|</span>
+            <a href="/compare">Compare Trajectories</a>
+        </div>
+
+        <header>
+            <h1>Generate & Probe</h1>
+            <p class="subtitle">Generate a response and visualize probe activations in real-time</p>
+        </header>
+
+        <div class="input-section">
+            <div class="input-group">
+                <label for="system-message">System Message (optional)</label>
+                <textarea id="system-message" placeholder="Enter system message..."></textarea>
+            </div>
+            <div class="input-group">
+                <label for="prompt">User Prompt</label>
+                <textarea id="prompt" placeholder="Enter your prompt here..." required></textarea>
+            </div>
+            <div class="params-row">
+                <div class="param-group">
+                    <label for="temperature">Temperature</label>
+                    <input type="number" id="temperature" value="0.7" min="0" max="2" step="0.1">
+                </div>
+                <div class="param-group">
+                    <label for="max-tokens">Max Tokens</label>
+                    <input type="number" id="max-tokens" value="2000" min="1" max="8000" step="100">
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn-primary" id="generate-btn">Generate & Analyze</button>
+            <div id="status" class="status" style="display: none;"></div>
+            <div id="rh-indicator" class="rh-indicator" style="display: none;">
+                <span class="rh-label">Reward Hacking:</span>
+                <span class="rh-badge" id="rh-badge"></span>
+            </div>
+        </div>
+        
+        <div class="layer-selector-container" id="layer-selector-container" style="display: none;">
+            <label style="color: #ccc; font-size: 0.9rem; font-weight: 500; margin-bottom: 8px; display: block;">Select Layers:</label>
+            <div id="layer-checkboxes" style="display: flex; flex-wrap: wrap; gap: 10px; padding: 15px; background: #1a1a1a; border-radius: 8px; margin-bottom: 20px;"></div>
+        </div>
+        
+        <div class="chart-container" id="chart-container">
+            <div class="chart-header">
+                <span class="chart-title">Probe Probability Over Tokens</span>
+                <span class="chart-stats" id="chart-stats"></span>
+            </div>
+            <canvas id="prob-chart" width="800" height="120"></canvas>
+        </div>
+
+        <div class="legend" id="legend">
+            <span class="legend-label">Probe probability:</span>
+            <span>0.0 (safe)</span>
+            <div class="legend-bar"></div>
+            <span>1.0 (reward hacking)</span>
+        </div>
+
+        <div class="tokens-container" id="tokens-container">
+            <div class="tokens-header">
+                <span class="tokens-title">Generated Response</span>
+                <span class="token-count" id="token-count"></span>
+            </div>
+            <div class="tokens-display" id="tokens-display"></div>
+        </div>
+    </div>
+
+    <div class="token-tooltip" id="tooltip" style="display: none;"></div>
+
+    <script>
+        // Reuse functions from index.html
+        const promptTextarea = document.getElementById('prompt');
+        const systemTextarea = document.getElementById('system-message');
+        const temperatureInput = document.getElementById('temperature');
+        const maxTokensInput = document.getElementById('max-tokens');
+        const generateBtn = document.getElementById('generate-btn');
+        const statusDiv = document.getElementById('status');
+        const tokensDisplay = document.getElementById('tokens-display');
+        const tokenCount = document.getElementById('token-count');
+        const tooltip = document.getElementById('tooltip');
+        const rhIndicator = document.getElementById('rh-indicator');
+        const rhBadge = document.getElementById('rh-badge');
+        const chartContainer = document.getElementById('chart-container');
+        const chartCanvas = document.getElementById('prob-chart');
+        const chartStats = document.getElementById('chart-stats');
+        const legend = document.getElementById('legend');
+        const tokensContainer = document.getElementById('tokens-container');
+        const layerSelectorContainer = document.getElementById('layer-selector-container');
+        const layerCheckboxes = document.getElementById('layer-checkboxes');
+        
+        let numLayers = 24;  // Default, will be loaded from API
+        let selectedLayers = [];  // Array of selected layer indices
+        let layerProbabilities = [];  // Store per-layer probabilities from API
+
+        // Load number of layers and create checkboxes
+        async function loadNumLayers() {
+            try {
+                const response = await fetch('/api/num_layers');
+                const data = await response.json();
+                numLayers = data.num_layers;
+                
+                // Create checkboxes for all layers (all selected by default)
+                layerCheckboxes.innerHTML = '';
+                selectedLayers = Array.from({length: numLayers}, (_, i) => i);
+                
+                for (let i = 0; i < numLayers; i++) {
+                    const checkboxDiv = document.createElement('div');
+                    checkboxDiv.className = 'layer-checkbox';
+                    
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.id = `layer-${i}`;
+                    checkbox.value = i;
+                    checkbox.checked = true;
+                    checkbox.addEventListener('change', updateSelectedLayers);
+                    
+                    const label = document.createElement('label');
+                    label.htmlFor = `layer-${i}`;
+                    label.textContent = `Layer ${i}`;
+                    
+                    checkboxDiv.appendChild(checkbox);
+                    checkboxDiv.appendChild(label);
+                    layerCheckboxes.appendChild(checkboxDiv);
+                }
+                
+                layerSelectorContainer.style.display = 'block';
+            } catch (error) {
+                console.error('Failed to load num_layers:', error);
+            }
+        }
+        
+        function updateSelectedLayers() {
+            selectedLayers = Array.from(layerCheckboxes.querySelectorAll('input[type="checkbox"]:checked'))
+                .map(cb => parseInt(cb.value))
+                .sort((a, b) => a - b);
+            
+            // Redraw chart if we have data
+            if (layerProbabilities.length > 0) {
+                drawChart(layerProbabilities);
+            }
+        }
+
+        function showStatus(message, type = 'loading') {
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+            statusDiv.style.display = 'block';
+        }
+
+        function hideStatus() {
+            statusDiv.style.display = 'none';
+        }
+
+        function getProbColor(prob) {
+            const hue = (1 - prob) * 120;
+            const saturation = 60 + prob * 15;
+            const lightness = 25 + prob * 15;
+            return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+        }
+
+        function getTextColor(prob) {
+            return prob > 0.6 ? '#fff' : '#eee';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function isSpecialToken(token) {
+            return token.startsWith('<') && token.endsWith('>');
+        }
+
+        function hasNewline(token) {
+            return token.includes('\n');
+        }
+
+        function renderTokens(tokens) {
+            tokensDisplay.innerHTML = '';
+            tokenCount.textContent = `${tokens.length} tokens`;
+
+            tokens.forEach((tokenData) => {
+                const token = tokenData.token;
+                const prob = tokenData.probability;
+                const bgColor = getProbColor(prob);
+                const textColor = getTextColor(prob);
+
+                if (hasNewline(token)) {
+                    const parts = token.split('\n');
+                    parts.forEach((part, partIndex) => {
+                        if (part.length > 0) {
+                            const span = createTokenSpan(part, tokenData, bgColor, textColor);
+                            tokensDisplay.appendChild(span);
+                        }
+                        if (partIndex < parts.length - 1) {
+                            const br = document.createElement('span');
+                            br.className = 'token newline';
+                            br.dataset.prob = prob.toFixed(4);
+                            br.dataset.tokenId = tokenData.token_id;
+                            br.dataset.position = tokenData.position;
+                            br.dataset.token = '\\n';
+                            br.addEventListener('mouseenter', showTooltip);
+                            br.addEventListener('mousemove', moveTooltip);
+                            br.addEventListener('mouseleave', hideTooltip);
+                            tokensDisplay.appendChild(br);
+                        }
+                    });
+                } else if (isSpecialToken(token)) {
+                    const span = document.createElement('span');
+                    span.className = 'token special';
+                    span.textContent = token;
+                    span.style.backgroundColor = bgColor;
+                    span.style.color = textColor;
+                    span.dataset.prob = prob.toFixed(4);
+                    span.dataset.tokenId = tokenData.token_id;
+                    span.dataset.position = tokenData.position;
+                    span.dataset.token = token;
+                    span.addEventListener('mouseenter', showTooltip);
+                    span.addEventListener('mousemove', moveTooltip);
+                    span.addEventListener('mouseleave', hideTooltip);
+                    tokensDisplay.appendChild(span);
+                } else {
+                    const span = createTokenSpan(token, tokenData, bgColor, textColor);
+                    tokensDisplay.appendChild(span);
+                }
+            });
+        }
+
+        function createTokenSpan(displayText, tokenData, bgColor, textColor) {
+            const span = document.createElement('span');
+            span.className = 'token';
+            span.style.backgroundColor = bgColor;
+            span.style.color = textColor;
+            span.textContent = displayText;
+            
+            span.dataset.prob = tokenData.probability.toFixed(4);
+            span.dataset.tokenId = tokenData.token_id;
+            span.dataset.position = tokenData.position;
+            span.dataset.token = tokenData.token;
+            
+            span.addEventListener('mouseenter', showTooltip);
+            span.addEventListener('mousemove', moveTooltip);
+            span.addEventListener('mouseleave', hideTooltip);
+            
+            return span;
+        }
+
+        function formatTokenDisplay(token) {
+            return token
+                .replace(/\n/g, '\\n')
+                .replace(/\t/g, '\\t')
+                .replace(/\r/g, '\\r');
+        }
+
+        function showTooltip(e) {
+            const target = e.target;
+            const prob = parseFloat(target.dataset.prob);
+            const tokenId = target.dataset.tokenId;
+            const position = target.dataset.position;
+            const token = target.dataset.token;
+            
+            const probPercent = (prob * 100).toFixed(1);
+            const probColor = getProbColor(prob);
+            const displayToken = formatTokenDisplay(token);
+            
+            tooltip.innerHTML = `
+                <div class="prob" style="color: ${probColor}">${probPercent}%</div>
+                <div class="token-preview">${escapeHtml(displayToken)}</div>
+                <div class="details">
+                    Position: ${position} · Token ID: ${tokenId}
+                </div>
+            `;
+            tooltip.style.display = 'block';
+            moveTooltip(e);
+        }
+
+        function moveTooltip(e) {
+            const x = e.clientX + 15;
+            const y = e.clientY + 15;
+            
+            const rect = tooltip.getBoundingClientRect();
+            const maxX = window.innerWidth - rect.width - 10;
+            const maxY = window.innerHeight - rect.height - 10;
+            
+            tooltip.style.left = Math.min(x, maxX) + 'px';
+            tooltip.style.top = Math.min(y, maxY) + 'px';
+        }
+
+        function hideTooltip() {
+            tooltip.style.display = 'none';
+        }
+
+        // Draw probability chart with multiple layers
+        function drawChart(layerProbsData) {
+            const ctx = chartCanvas.getContext('2d');
+            const width = chartCanvas.width = chartCanvas.offsetWidth * 2;  // Retina
+            const height = chartCanvas.height = 400;  // Retina (increased for multiple lines)
+            
+            ctx.scale(2, 2);  // Retina scaling
+            const w = width / 2;
+            const h = height / 2;
+            
+            // Clear
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, w, h);
+            
+            if (!layerProbsData || layerProbsData.length === 0) {
+                console.warn('No layer probabilities data provided to drawChart');
+                return;
+            }
+            
+            // If no layers are selected yet, use all layers from the data
+            const layersToUse = selectedLayers.length > 0 ? selectedLayers : layerProbsData.map(lp => lp.layer_index);
+            
+            // Filter to only selected layers
+            const selectedLayerData = layerProbsData.filter(lp => layersToUse.includes(lp.layer_index));
+            if (selectedLayerData.length === 0) {
+                console.warn('No matching layer data found. Available layers:', layerProbsData.map(lp => lp.layer_index), 'Selected:', selectedLayers);
+                return;
+            }
+            
+            console.log('Drawing chart with', selectedLayerData.length, 'layers,', selectedLayerData[0].probabilities.length, 'probabilities per layer');
+            
+            // Get all logits for stats (these are raw logits, not probabilities)
+            const allLogits = selectedLayerData.flatMap(lp => lp.probabilities);
+            const maxLogit = Math.max(...allLogits);
+            const minLogit = Math.min(...allLogits);
+            const avgLogit = allLogits.reduce((a, b) => a + b, 0) / allLogits.length;
+            
+            // Update stats (show raw logit values)
+            chartStats.textContent = `${selectedLayerData.length} layer(s) · Min: ${minLogit.toFixed(2)} · Avg: ${avgLogit.toFixed(2)} · Max: ${maxLogit.toFixed(2)}`;
+            
+            // Calculate range for scaling (add padding)
+            const range = maxLogit - minLogit;
+            const paddingValue = range * 0.1 || 1; // 10% padding, or 1 if range is 0
+            const scaledMin = minLogit - paddingValue;
+            const scaledMax = maxLogit + paddingValue;
+            const scaledRange = scaledMax - scaledMin;
+            
+            const padding = { top: 20, right: 10, bottom: 30, left: 50 };
+            const chartW = w - padding.left - padding.right;
+            const chartH = h - padding.top - padding.bottom;
+            
+            // Draw grid lines
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 0.5;
+            for (let i = 0; i <= 4; i++) {
+                const y = padding.top + (chartH * i / 4);
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(w - padding.right, y);
+                ctx.stroke();
+            }
+            
+            // Y-axis labels (show logit values)
+            ctx.fillStyle = '#666';
+            ctx.font = '10px system-ui';
+            ctx.textAlign = 'right';
+            for (let i = 0; i <= 4; i++) {
+                const val = scaledMax - (scaledRange * i / 4);
+                const y = padding.top + (chartH * i / 4);
+                ctx.fillText(val.toFixed(1), padding.left - 5, y + 3);
+            }
+            
+            // Color palette for layers
+            const colors = [
+                '#5a9cf5', '#f55a5a', '#5af5a9', '#f5a95a', '#a95af5',
+                '#5af5f5', '#f55af5', '#f5f55a', '#5a5af5', '#f55a5a'
+            ];
+            
+            // Draw each layer's line
+            selectedLayerData.forEach((layerData, idx) => {
+                const logits = layerData.probabilities;
+                const color = colors[layerData.layer_index % colors.length];
+                const alpha = selectedLayerData.length > 1 ? 0.7 : 1.0;
+                
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = selectedLayerData.length === 1 ? 2 : 1.5;
+                ctx.globalAlpha = alpha;
+                
+                for (let i = 0; i < logits.length; i++) {
+                    const x = padding.left + (i / Math.max(logits.length - 1, 1)) * chartW;
+                    // Scale logit to chart height (invert: higher logits at top)
+                    const normalizedLogit = (logits[i] - scaledMin) / scaledRange;
+                    const y = padding.top + (1 - normalizedLogit) * chartH;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+            });
+            
+            ctx.globalAlpha = 1.0;
+            
+            // Draw mean line if multiple layers
+            if (selectedLayerData.length > 1) {
+                const meanLogits = [];
+                const maxLen = Math.max(...selectedLayerData.map(lp => lp.probabilities.length));
+                for (let i = 0; i < maxLen; i++) {
+                    const sum = selectedLayerData.reduce((acc, lp) => acc + (lp.probabilities[i] || 0), 0);
+                    const count = selectedLayerData.filter(lp => i < lp.probabilities.length).length;
+                    meanLogits.push(sum / count);
+                }
+                
+                ctx.beginPath();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);
+                
+                for (let i = 0; i < meanLogits.length; i++) {
+                    const x = padding.left + (i / Math.max(meanLogits.length - 1, 1)) * chartW;
+                    // Scale logit to chart height (invert: higher logits at top)
+                    const normalizedLogit = (meanLogits[i] - scaledMin) / scaledRange;
+                    const y = padding.top + (1 - normalizedLogit) * chartH;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+
+        function updateRHIndicator(isRewardHacking) {
+            rhIndicator.style.display = 'flex';
+            if (isRewardHacking) {
+                rhBadge.textContent = 'Detected';
+                rhBadge.className = 'rh-badge hacking';
+            } else {
+                rhBadge.textContent = 'Safe';
+                rhBadge.className = 'rh-badge safe';
+            }
+        }
+
+        async function generateAndAnalyze() {
+            const prompt = promptTextarea.value.trim();
+            if (!prompt) {
+                showStatus('Please enter a prompt', 'error');
+                return;
+            }
+
+            generateBtn.disabled = true;
+            showStatus('Generating response and analyzing... This may take a moment.', 'loading');
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        system_message: systemTextarea.value.trim(),
+                        temperature: parseFloat(temperatureInput.value),
+                        max_tokens: parseInt(maxTokensInput.value)
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Generation failed');
+                }
+
+                const result = await response.json();
+                
+                // Store layer probabilities
+                layerProbabilities = result.layer_probabilities || [];
+                
+                console.log('Result:', result);
+                console.log('Layer probabilities:', layerProbabilities);
+                console.log('Tokens:', result.tokens);
+                
+                if (!result.tokens || result.tokens.length === 0) {
+                    throw new Error('No tokens returned from server');
+                }
+                
+                updateRHIndicator(result.is_reward_hacking);
+                
+                chartContainer.style.display = 'block';
+                legend.style.display = 'flex';
+                tokensContainer.style.display = 'block';
+                
+                // Draw chart with layer data
+                if (layerProbabilities.length > 0) {
+                    console.log('Drawing chart with', layerProbabilities.length, 'layers');
+                    // If selectedLayers is empty, initialize it with all layers
+                    if (selectedLayers.length === 0) {
+                        selectedLayers = layerProbabilities.map(lp => lp.layer_index);
+                        console.log('Initialized selectedLayers to:', selectedLayers);
+                    }
+                    drawChart(layerProbabilities);
+                } else {
+                    console.warn('No layer probabilities in response, chart will not be drawn');
+                }
+                
+                // Render tokens (colored by mean over selected layers)
+                renderTokens(result.tokens);
+                showStatus(`Generated ${result.tokens.length} tokens`, 'success');
+                
+                setTimeout(hideStatus, 3000);
+            } catch (error) {
+                showStatus('Error: ' + error.message, 'error');
+            } finally {
+                generateBtn.disabled = false;
+            }
+        }
+
+        generateBtn.addEventListener('click', generateAndAnalyze);
+
+        // Allow Enter+Ctrl/Cmd to submit
+        promptTextarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                generateAndAnalyze();
+            }
+        });
+    </script>
+</body>
+</html>
+
