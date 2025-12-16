@@ -237,8 +237,8 @@ async def analyze_rollout(request: AnalyzeRequest) -> AnalyzeResponse:
     # all_activations: (num_layers, seq_len, hidden_dim)
     # We compute per-layer and then can aggregate
     
-    act_mean = probe_data['act_mean']  # (num_layers, hidden_dim)
-    act_std = probe_data['act_std']    # (num_layers, hidden_dim)
+    act_mean = probe_data['act_mean'].squeeze(0)  # (num_layers, hidden_dim)
+    act_std = probe_data['act_std'].squeeze(0)    # (num_layers, hidden_dim)
     weights = probe_data['weights']    # (num_layers, hidden_dim)
     biases = probe_data['biases']      # (num_layers,)
     
