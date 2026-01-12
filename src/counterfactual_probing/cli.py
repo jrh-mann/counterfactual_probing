@@ -65,6 +65,7 @@ def cmd_run(args):
 def cmd_init(args):
     """Execute the init command."""
     import json
+
     from .config import create_default_config
 
     output_path = Path(args.output)

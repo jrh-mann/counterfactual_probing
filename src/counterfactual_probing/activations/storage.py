@@ -4,16 +4,17 @@ Activation storage utilities.
 Functions for saving and loading activations to/from disk.
 """
 
-import torch
 from pathlib import Path
-from typing import Dict, Any, List, Union
+from typing import Any
+
+import torch
 
 
 def save_activations(
     activations: torch.Tensor,
-    token_ids: List[int],
-    metadata: Dict[str, Any],
-    path: Union[str, Path],
+    token_ids: list[int],
+    metadata: dict[str, Any],
+    path: str | Path,
 ) -> None:
     """
     Save activations to disk.
@@ -36,7 +37,7 @@ def save_activations(
     torch.save(data, path)
 
 
-def load_activations(path: Union[str, Path]) -> Dict[str, Any]:
+def load_activations(path: str | Path) -> dict[str, Any]:
     """
     Load activations from disk.
 
@@ -58,9 +59,9 @@ def load_activations(path: Union[str, Path]) -> Dict[str, Any]:
 
 
 def load_activations_batch(
-    paths: List[Union[str, Path]],
+    paths: list[str | Path],
     stack: bool = True,
-) -> Union[torch.Tensor, List[torch.Tensor]]:
+) -> torch.Tensor | list[torch.Tensor]:
     """
     Load multiple activation files.
 

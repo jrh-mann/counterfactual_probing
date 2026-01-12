@@ -4,7 +4,6 @@ Base class for scorers and scorer loading utilities.
 
 import importlib
 from abc import ABC, abstractmethod
-from typing import List, Optional
 
 
 class Scorer(ABC):
@@ -15,7 +14,7 @@ class Scorer(ABC):
     The score_batch() method can optionally be overridden for efficiency.
     """
 
-    def __init__(self, config: Optional[dict] = None):
+    def __init__(self, config: dict | None = None):
         """
         Initialize the scorer.
 
@@ -40,7 +39,7 @@ class Scorer(ABC):
         """
         pass
 
-    def score_batch(self, texts: List[str]) -> List[float]:
+    def score_batch(self, texts: list[str]) -> list[float]:
         """
         Score multiple texts.
 
@@ -54,6 +53,21 @@ class Scorer(ABC):
             List of scores, one per input text
         """
         return [self.score(t) for t in texts]
+
+    def set_context(self, prompt: str, metadata: dict) -> None:  # noqa: B027
+        """
+        Set the context for scoring (called before scoring counterfactuals for a prompt).
+
+        Override this method if your scorer needs access to the original prompt
+        or metadata (e.g., ground truth answers) to score completions.
+
+        This is intentionally not abstract - the default implementation does nothing,
+        which is valid for scorers that don't need context.
+
+        Args:
+            prompt: The original prompt text
+            metadata: Additional metadata from the dataset (e.g., ground truth answer)
+        """
 
 
 def load_scorer(scorer_config: dict) -> Scorer:

@@ -6,14 +6,15 @@ continuations from prefix-conditioned prompts, working entirely with
 token IDs for precision.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import Any
+
 from transformers import PreTrainedTokenizer
 
 
 def create_prefix_prompt(
-    prefix_ids: List[int],
+    prefix_ids: list[int],
     tokenizer: PreTrainedTokenizer,
-    messages: List[Dict[str, str]],
+    messages: list[dict[str, str]],
 ) -> str:
     """
     Create a prompt string for generating continuations from a prefix.
@@ -59,7 +60,7 @@ def create_prefix_prompt(
     return formatted
 
 
-def validate_token_ids(token_ids: List[int], vocab_size: int) -> Dict[str, Any]:
+def validate_token_ids(token_ids: list[int], vocab_size: int) -> dict[str, Any]:
     """
     Validate that token IDs are within vocabulary range.
 
@@ -80,9 +81,9 @@ def validate_token_ids(token_ids: List[int], vocab_size: int) -> Dict[str, Any]:
 
 
 def extract_continuation(
-    full_ids: List[int],
-    prefix_ids: List[int],
-) -> List[int]:
+    full_ids: list[int],
+    prefix_ids: list[int],
+) -> list[int]:
     """
     Extract continuation tokens from full sequence given prefix.
 
@@ -105,15 +106,15 @@ def extract_continuation(
 
 
 def generate_counterfactuals(
-    prefix_ids: List[int],
-    messages: List[Dict[str, str]],
+    prefix_ids: list[int],
+    messages: list[dict[str, str]],
     model_name: str,
     tokenizer: PreTrainedTokenizer,
     num_counterfactuals: int = 50,
     temperature: float = 0.7,
     max_tokens: int = 4096,
-    llm: Optional[Any] = None,
-) -> List[Dict[str, Any]]:
+    llm: Any | None = None,
+) -> list[dict[str, Any]]:
     """
     Generate counterfactual continuations from a prefix.
 
@@ -162,15 +163,15 @@ def generate_counterfactuals(
 
 
 def generate_counterfactuals_batch(
-    prefix_ids: List[int],
-    messages: List[Dict[str, str]],
+    prefix_ids: list[int],
+    messages: list[dict[str, str]],
     model_name: str,
     tokenizer: PreTrainedTokenizer,
     num_counterfactuals: int = 50,
     temperature: float = 0.7,
     max_tokens: int = 4096,
-    llm: Optional[Any] = None,
-) -> List[Dict[str, Any]]:
+    llm: Any | None = None,
+) -> list[dict[str, Any]]:
     """
     Generate counterfactuals using batch prompting for efficiency.
 
@@ -224,13 +225,13 @@ def generate_counterfactuals_batch(
 
 
 def generate_initial_rollout(
-    messages: List[Dict[str, str]],
+    messages: list[dict[str, str]],
     model_name: str,
     tokenizer: PreTrainedTokenizer,
     temperature: float = 0.7,
     max_tokens: int = 4096,
-    llm: Optional[Any] = None,
-) -> Dict[str, Any]:
+    llm: Any | None = None,
+) -> dict[str, Any]:
     """
     Generate an initial rollout for a prompt.
 

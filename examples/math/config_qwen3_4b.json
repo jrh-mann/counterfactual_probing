@@ -1,0 +1,34 @@
+{
+  "dataset": {
+    "path": "examples/math/problems.jsonl",
+    "prompt_field": "prompt",
+    "format": "jsonl"
+  },
+  "model": {
+    "name": "Qwen/Qwen3-4B",
+    "tensor_parallel_size": 1,
+    "gpu_memory_utilization": 0.9
+  },
+  "generation": {
+    "temperature": 0.7,
+    "max_tokens": 8000,
+    "num_counterfactuals": 20,
+    "num_initial_rollouts": 1
+  },
+  "sampling": {
+    "method": "uniform_count",
+    "num_samples": 20,
+    "seed": 42
+  },
+  "scorer": {
+    "module": "counterfactual_probing.scorer.examples.math",
+    "class": "MathScorer",
+    "config": {
+      "answer_field": "answer"
+    }
+  },
+  "output": {
+    "dir": "outputs/qwen3-4b/math/"
+  },
+  "skip_existing": true
+}

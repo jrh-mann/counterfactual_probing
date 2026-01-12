@@ -6,7 +6,6 @@ for counterfactual generation.
 """
 
 import random
-from typing import List, Optional
 
 
 class TokenSampler:
@@ -23,7 +22,7 @@ class TokenSampler:
         method: str = "uniform_count",
         num_samples: int = 20,
         density: float = 0.02,
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ):
         """
         Initialize the sampler.
@@ -57,7 +56,7 @@ class TokenSampler:
         # Initialize random state
         self._rng = random.Random(seed)
 
-    def sample(self, token_ids: List[int]) -> List[int]:
+    def sample(self, token_ids: list[int]) -> list[int]:
         """
         Return sorted list of token indices to branch from.
 
@@ -86,7 +85,7 @@ class TokenSampler:
             # Should not reach here due to __init__ validation
             raise ValueError(f"Unknown sampling method: {self.method}")
 
-    def _sample_uniform_count(self, n: int) -> List[int]:
+    def _sample_uniform_count(self, n: int) -> list[int]:
         """
         Sample exactly num_samples positions uniformly.
 
@@ -113,7 +112,7 @@ class TokenSampler:
 
         return sorted(indices)
 
-    def _sample_density(self, n: int) -> List[int]:
+    def _sample_density(self, n: int) -> list[int]:
         """
         Sample approximately (density * n) positions.
 
@@ -142,7 +141,7 @@ class TokenSampler:
 
         return sorted(indices)
 
-    def reset(self, seed: Optional[int] = None):
+    def reset(self, seed: int | None = None):
         """
         Reset the random state.
 

@@ -5,16 +5,17 @@ Provides utilities for extracting activations from transformer models
 at specific token positions.
 """
 
+from typing import Any
+
 import torch
-from typing import List, Dict, Any, Optional
 from transformers import PreTrainedTokenizer
 
 
 def validate_extraction_input(
     text: str,
     tokenizer: PreTrainedTokenizer,
-    positions: Optional[List[int]] = None,
-) -> Dict[str, Any]:
+    positions: list[int] | None = None,
+) -> dict[str, Any]:
     """
     Validate inputs before extraction.
 
@@ -50,7 +51,7 @@ def validate_extraction_input(
 
 
 def prepare_nnsight_input(
-    messages: List[Dict[str, str]],
+    messages: list[dict[str, str]],
     assistant_content: str,
     tokenizer: PreTrainedTokenizer,
 ) -> str:
@@ -81,10 +82,10 @@ def extract_activations(
     text: str,
     model_name: str,
     tokenizer: PreTrainedTokenizer,
-    positions: Optional[List[int]] = None,
-    layers: Optional[List[int]] = None,
+    positions: list[int] | None = None,
+    layers: list[int] | None = None,
     device: str = "auto",
-    model: Optional[Any] = None,
+    model: Any | None = None,
 ) -> torch.Tensor:
     """
     Extract activations from a model for given text.
@@ -101,7 +102,6 @@ def extract_activations(
     Returns:
         Tensor of shape (num_layers, num_positions, hidden_dim)
     """
-    import nnsight
     from nnsight import LanguageModel
 
     # Load model if not provided
@@ -121,21 +121,20 @@ def extract_activations(
         positions = list(range(n_tokens))
 
     # Run forward pass with nnsight tracing
-    with torch.no_grad():
-        with model.trace(text):
-            # Collect activations from each layer
-            saved_outputs = []
+    with torch.no_grad(), model.trace(text):
+        # Collect activations from each layer
+        saved_outputs = []
 
-            if layers is None:
-                # Get all layers
-                for layer in model.model.layers:
-                    saved_outputs.append(layer.output[0].save())
-            else:
-                # Get specific layers
-                for layer_idx in layers:
-                    saved_outputs.append(
-                        model.model.layers[layer_idx].output[0].save()
-                    )
+        if layers is None:
+            # Get all layers
+            for layer in model.model.layers:
+                saved_outputs.append(layer.output[0].save())
+        else:
+            # Get specific layers
+            for layer_idx in layers:
+                saved_outputs.append(
+                    model.model.layers[layer_idx].output[0].save()
+                )
 
     # Stack layer outputs
     # Each saved output is (batch=1, seq_len, hidden_dim)
@@ -151,11 +150,11 @@ def extract_activations(
 
 def extract_activations_at_token_indices(
     formatted_text: str,
-    token_indices: List[int],
+    token_indices: list[int],
     model_name: str,
     tokenizer: PreTrainedTokenizer,
-    layers: Optional[List[int]] = None,
-    model: Optional[Any] = None,
+    layers: list[int] | None = None,
+    model: Any | None = None,
 ) -> torch.Tensor:
     """
     Extract activations at specific token indices.
@@ -174,7 +173,6 @@ def extract_activations_at_token_indices(
     Returns:
         Tensor of shape (num_layers, len(token_indices), hidden_dim)
     """
-    import nnsight
     from nnsight import LanguageModel
 
     # Load model if not provided
@@ -186,18 +184,17 @@ def extract_activations_at_token_indices(
         )
 
     # Run forward pass with nnsight tracing
-    with torch.no_grad():
-        with model.trace(formatted_text):
-            saved_outputs = []
+    with torch.no_grad(), model.trace(formatted_text):
+        saved_outputs = []
 
-            if layers is None:
-                for layer in model.model.layers:
-                    saved_outputs.append(layer.output[0].save())
-            else:
-                for layer_idx in layers:
-                    saved_outputs.append(
-                        model.model.layers[layer_idx].output[0].save()
-                    )
+        if layers is None:
+            for layer in model.model.layers:
+                saved_outputs.append(layer.output[0].save())
+        else:
+            for layer_idx in layers:
+                saved_outputs.append(
+                    model.model.layers[layer_idx].output[0].save()
+                )
 
     # Stack and extract
     layer_tensors = [out.value.squeeze(0) for out in saved_outputs]

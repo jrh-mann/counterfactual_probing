@@ -12,7 +12,7 @@ class DummyScorer(Scorer):
     Useful for testing the pipeline without actual scoring logic.
     """
 
-    def __init__(self, config: dict = None):
+    def __init__(self, config: dict | None = None):
         super().__init__(config)
         self.return_value = self.config.get("return_value", 0.0)
 

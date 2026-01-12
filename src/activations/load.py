@@ -719,11 +719,183 @@ def clear_cache(base_dir: str = "/workspace", cache_file: Optional[str] = None) 
     """Clear the activation cache file."""
     if cache_file is None:
         cache_file = str(Path(base_dir) / "_activation_cache.npz")
-    
+
     cache_path = Path(cache_file)
     if cache_path.exists():
         cache_path.unlink()
         print(f"Deleted cache: {cache_file}")
     else:
         print(f"No cache found at: {cache_file}")
+
+
+def split_by_prompt(
+    metadata: List[Dict[str, Any]],
+    test_ratio: float = 0.2,
+    seed: int = 42,
+    stratify_by_label: bool = False,
+    label_key: str = 'p_reward_hacks',
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Split data indices by prompt, ensuring all samples from a prompt are in train OR test.
+
+    This prevents data leakage when training probes - if samples from the same prompt
+    appear in both train and test, the probe could learn prompt-specific features
+    rather than generalizable patterns.
+
+    Args:
+        metadata: List of metadata dicts from quick_load(), each with 'prompt_name' key
+        test_ratio: Fraction of prompts to use for test set (default 0.2)
+        seed: Random seed for reproducibility
+        stratify_by_label: If True, stratify split by average label per prompt
+                          to ensure similar label distributions in train/test
+        label_key: Key in metadata for the label (default 'p_reward_hacks')
+
+    Returns:
+        Tuple of (train_indices, test_indices) as numpy arrays
+
+    Example:
+        >>> activations, metadata, labels = quick_load(base_dir)
+        >>> train_idx, test_idx = split_by_prompt(metadata, test_ratio=0.2)
+        >>> X_train, y_train = activations[train_idx], labels[train_idx]
+        >>> X_test, y_test = activations[test_idx], labels[test_idx]
+    """
+    rng = np.random.RandomState(seed)
+
+    # Group sample indices by prompt_name
+    prompt_to_indices: Dict[str, List[int]] = {}
+    prompt_to_labels: Dict[str, List[float]] = {}
+
+    for idx, meta in enumerate(metadata):
+        prompt_name = meta.get('prompt_name', f'unknown_{idx}')
+
+        if prompt_name not in prompt_to_indices:
+            prompt_to_indices[prompt_name] = []
+            prompt_to_labels[prompt_name] = []
+
+        prompt_to_indices[prompt_name].append(idx)
+        if stratify_by_label:
+            prompt_to_labels[prompt_name].append(meta.get(label_key, 0.0))
+
+    prompt_names = list(prompt_to_indices.keys())
+    n_prompts = len(prompt_names)
+    n_test = max(1, int(n_prompts * test_ratio))
+
+    if stratify_by_label:
+        # Compute average label per prompt and sort
+        prompt_avg_labels = {
+            name: np.mean(labels) if labels else 0.0
+            for name, labels in prompt_to_labels.items()
+        }
+
+        # Sort prompts by average label
+        sorted_prompts = sorted(prompt_names, key=lambda x: prompt_avg_labels[x])
+
+        # Stratified split: take every k-th prompt for test set
+        # This ensures test set has prompts distributed across the label range
+        k = max(1, n_prompts // n_test) if n_test > 0 else n_prompts
+
+        # Select test prompts evenly spaced through the sorted list
+        # Add small random offset within each stratum for variety
+        test_prompts = set()
+        for i in range(n_test):
+            # Pick from the i-th stratum
+            stratum_start = i * k
+            stratum_end = min((i + 1) * k, n_prompts)
+            if stratum_start < n_prompts:
+                # Random choice within stratum
+                stratum_indices = list(range(stratum_start, stratum_end))
+                chosen_idx = rng.choice(stratum_indices)
+                test_prompts.add(sorted_prompts[chosen_idx])
+
+        train_prompts = set(sorted_prompts) - test_prompts
+    else:
+        # Simple random split
+        shuffled = prompt_names.copy()
+        rng.shuffle(shuffled)
+        test_prompts = set(shuffled[:n_test])
+        train_prompts = set(shuffled[n_test:])
+
+    # Collect indices
+    train_indices = []
+    test_indices = []
+
+    for prompt_name, indices in prompt_to_indices.items():
+        if prompt_name in test_prompts:
+            test_indices.extend(indices)
+        else:
+            train_indices.extend(indices)
+
+    # Sort indices for consistent ordering
+    train_indices = np.array(sorted(train_indices))
+    test_indices = np.array(sorted(test_indices))
+
+    return train_indices, test_indices
+
+
+def split_by_prompt_kfold(
+    metadata: List[Dict[str, Any]],
+    n_folds: int = 5,
+    seed: int = 42,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """
+    K-fold cross-validation split by prompt.
+
+    Each fold uses different prompts for test, ensuring no prompt appears
+    in both train and test within any fold.
+
+    Args:
+        metadata: List of metadata dicts from quick_load()
+        n_folds: Number of folds (default 5)
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of (train_indices, test_indices) tuples, one per fold
+
+    Example:
+        >>> activations, metadata, labels = quick_load(base_dir)
+        >>> folds = split_by_prompt_kfold(metadata, n_folds=5)
+        >>> for fold_idx, (train_idx, test_idx) in enumerate(folds):
+        ...     X_train, y_train = activations[train_idx], labels[train_idx]
+        ...     X_test, y_test = activations[test_idx], labels[test_idx]
+        ...     # Train and evaluate probe
+    """
+    rng = np.random.RandomState(seed)
+
+    # Group sample indices by prompt_name
+    prompt_to_indices: Dict[str, List[int]] = {}
+
+    for idx, meta in enumerate(metadata):
+        prompt_name = meta.get('prompt_name', f'unknown_{idx}')
+        if prompt_name not in prompt_to_indices:
+            prompt_to_indices[prompt_name] = []
+        prompt_to_indices[prompt_name].append(idx)
+
+    # Shuffle prompts
+    prompt_names = list(prompt_to_indices.keys())
+    rng.shuffle(prompt_names)
+
+    # Assign prompts to folds
+    n_prompts = len(prompt_names)
+    fold_assignments = np.arange(n_prompts) % n_folds
+
+    folds = []
+    for fold_idx in range(n_folds):
+        test_prompt_mask = fold_assignments == fold_idx
+        test_prompts = {prompt_names[i] for i in range(n_prompts) if test_prompt_mask[i]}
+
+        train_indices = []
+        test_indices = []
+
+        for prompt_name, indices in prompt_to_indices.items():
+            if prompt_name in test_prompts:
+                test_indices.extend(indices)
+            else:
+                train_indices.extend(indices)
+
+        train_indices = np.array(sorted(train_indices))
+        test_indices = np.array(sorted(test_indices))
+
+        folds.append((train_indices, test_indices))
+
+    return folds
 

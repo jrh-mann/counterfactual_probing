@@ -7,8 +7,9 @@ user-defined field mapping.
 
 import csv
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Any
+from typing import Any
 
 
 class Dataset:
@@ -23,7 +24,7 @@ class Dataset:
         self,
         path: str,
         prompt_field: str = "prompt",
-        format: Optional[str] = None,
+        format: str | None = None,
     ):
         """
         Initialize the dataset.
@@ -54,7 +55,7 @@ class Dataset:
             )
 
         self.format = format
-        self._items: List[Dict[str, Any]] = []
+        self._items: list[dict[str, Any]] = []
         self._loaded = False
 
     def _detect_format(self) -> str:
@@ -86,7 +87,7 @@ class Dataset:
 
         self._loaded = True
 
-    def _load_jsonl(self) -> List[Dict[str, Any]]:
+    def _load_jsonl(self) -> list[dict[str, Any]]:
         """Load JSONL file."""
         items = []
         with open(self.path) as f:
@@ -96,7 +97,7 @@ class Dataset:
                     items.append(json.loads(line))
         return items
 
-    def _load_json(self) -> List[Dict[str, Any]]:
+    def _load_json(self) -> list[dict[str, Any]]:
         """Load JSON file (expected to be a list)."""
         with open(self.path) as f:
             data = json.load(f)
@@ -104,7 +105,7 @@ class Dataset:
             raise ValueError("JSON file must contain a list of objects")
         return data
 
-    def _load_csv(self) -> List[Dict[str, Any]]:
+    def _load_csv(self) -> list[dict[str, Any]]:
         """Load CSV file."""
         items = []
         with open(self.path, newline="") as f:
@@ -113,7 +114,7 @@ class Dataset:
                 items.append(dict(row))
         return items
 
-    def _transform_item(self, raw_item: Dict[str, Any]) -> Dict[str, Any]:
+    def _transform_item(self, raw_item: dict[str, Any]) -> dict[str, Any]:
         """
         Transform a raw item into the standard format.
 
@@ -140,7 +141,7 @@ class Dataset:
             "metadata": metadata,
         }
 
-    def __iter__(self) -> Iterator[Dict[str, Any]]:
+    def __iter__(self) -> Iterator[dict[str, Any]]:
         """Iterate over dataset items."""
         self._load()
         for item in self._items:
@@ -151,7 +152,7 @@ class Dataset:
         self._load()
         return len(self._items)
 
-    def __getitem__(self, index: int) -> Dict[str, Any]:
+    def __getitem__(self, index: int) -> dict[str, Any]:
         """Get item by index."""
         self._load()
         return self._transform_item(self._items[index])
@@ -159,7 +160,7 @@ class Dataset:
     @classmethod
     def from_list(
         cls,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         prompt_field: str = "prompt",
     ) -> "Dataset":
         """
@@ -181,7 +182,7 @@ class Dataset:
         return instance
 
     @classmethod
-    def from_strings(cls, prompts: List[str]) -> "Dataset":
+    def from_strings(cls, prompts: list[str]) -> "Dataset":
         """
         Create a dataset from a list of prompt strings.
 

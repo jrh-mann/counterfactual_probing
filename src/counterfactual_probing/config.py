@@ -6,8 +6,11 @@ Provides typed configuration with sensible defaults and clear error messages.
 
 import json
 from pathlib import Path
-from typing import Optional, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+from .model_utils import get_experiment_paths, get_model_slug
 
 
 class DatasetConfig(BaseModel):
@@ -90,7 +93,7 @@ class SamplingConfig(BaseModel):
         le=1.0,
         description="Sampling density for density method"
     )
-    seed: Optional[int] = Field(
+    seed: int | None = Field(
         default=None,
         description="Random seed for reproducibility"
     )
@@ -134,12 +137,32 @@ class Config(BaseModel):
     model: ModelConfig
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
-    scorer: Optional[ScorerConfig] = None
+    scorer: ScorerConfig | None = None
     output: OutputConfig = Field(default_factory=OutputConfig)
     skip_existing: bool = Field(
         default=True,
         description="Skip prompts with existing output files"
     )
+
+    @property
+    def model_slug(self) -> str:
+        """Get the derived slug for the current model."""
+        return get_model_slug(self.model.name)
+
+    def get_experiment_paths(self, experiment_name: str = "default") -> dict:
+        """
+        Get all paths for this model/experiment combination.
+
+        Args:
+            experiment_name: Name of the experiment (e.g., "math")
+
+        Returns:
+            Dict with outputs_dir, activations_dir, plots_dir, probes_dir, model_slug
+        """
+        return get_experiment_paths(
+            model_name=self.model.name,
+            experiment_name=experiment_name,
+        )
 
 
 def load_config(config_path: str) -> Config:
@@ -165,22 +188,31 @@ def load_config(config_path: str) -> Config:
         with open(path) as f:
             raw_config = json.load(f)
     except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in config file: {e}")
+        raise ValueError(f"Invalid JSON in config file: {e}") from e
 
     try:
         return Config(**raw_config)
     except Exception as e:
         # Re-raise with more context
-        raise ValueError(f"Configuration validation error: {e}")
+        raise ValueError(f"Configuration validation error: {e}") from e
 
 
-def create_default_config() -> dict:
+def create_default_config(
+    model_name: str = "Qwen/Qwen2.5-0.5B",
+    experiment_name: str = "default",
+) -> dict:
     """
     Create a default configuration dictionary.
+
+    Args:
+        model_name: Model to use (determines output paths)
+        experiment_name: Experiment name for organizing outputs
 
     Returns:
         Dictionary with default configuration values
     """
+    paths = get_experiment_paths(model_name, experiment_name)
+
     return {
         "dataset": {
             "path": "data/prompts.jsonl",
@@ -188,7 +220,7 @@ def create_default_config() -> dict:
             "format": "jsonl",
         },
         "model": {
-            "name": "Qwen/Qwen2.5-0.5B",
+            "name": model_name,
             "tensor_parallel_size": 1,
             "gpu_memory_utilization": 0.9,
         },
@@ -209,7 +241,7 @@ def create_default_config() -> dict:
             "config": {},
         },
         "output": {
-            "dir": "outputs/",
+            "dir": str(paths["outputs_dir"]),
         },
         "skip_existing": True,
     }

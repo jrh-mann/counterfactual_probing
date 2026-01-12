@@ -7,14 +7,15 @@ probing pipeline.
 
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any
+
 from tqdm import tqdm
 
-from .config import load_config, Config
+from .config import Config, load_config
 from .dataset import Dataset
+from .generator import generate_counterfactuals_batch, generate_initial_rollout
 from .sampler import TokenSampler
-from .scorer import load_scorer, Scorer
-from .generator import generate_initial_rollout, generate_counterfactuals_batch
+from .scorer import Scorer, load_scorer
 
 
 def run(config_path: str) -> None:
@@ -51,7 +52,7 @@ def run(config_path: str) -> None:
     )
 
     # Load scorer if configured
-    scorer: Optional[Scorer] = None
+    scorer: Scorer | None = None
     if config.scorer:
         scorer = load_scorer({
             "module": config.scorer.module,
@@ -60,8 +61,8 @@ def run(config_path: str) -> None:
         })
 
     # Initialize model and tokenizer
-    from vllm import LLM
     from transformers import AutoTokenizer
+    from vllm import LLM
 
     llm = LLM(
         model=config.model.name,
@@ -106,14 +107,14 @@ def run(config_path: str) -> None:
 
 def process_prompt(
     prompt: str,
-    metadata: Dict[str, Any],
+    metadata: dict[str, Any],
     prompt_id: str,
     config: Config,
     sampler: TokenSampler,
-    scorer: Optional[Scorer],
+    scorer: Scorer | None,
     tokenizer,
     llm,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Process a single prompt through the pipeline.
 
@@ -144,6 +145,10 @@ def process_prompt(
     )
 
     initial_token_ids = initial["token_ids"]
+
+    # Set scorer context (for scorers that need ground truth)
+    if scorer:
+        scorer.set_context(prompt, metadata)
 
     # Sample branch points
     branch_points = sampler.sample(initial_token_ids)
