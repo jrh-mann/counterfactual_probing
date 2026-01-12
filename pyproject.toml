@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "counterfactual-probing"
+version = "0.1.0"
+description = "A library for counterfactual probing of language models"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "James"}
+]
+dependencies = [
+    "tqdm>=4.65.0",
+    "vllm>=0.11.0",
+    "nnsight",
+    "transformers",
+    "torch",
+    "numpy",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "pytest-xdist",  # parallel test execution
+]
+analysis = [
+    "matplotlib",
+    "scipy",
+    "scikit-learn",
+    "plotly",
+    "seaborn",
+    "ipykernel",
+    "nbformat",
+]
+
+[project.scripts]
+cfprobe = "counterfactual_probing.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+markers = [
+    "integration: marks tests as integration tests (require model download)",
+    "slow: marks tests as slow running",
+]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["src/counterfactual_probing"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

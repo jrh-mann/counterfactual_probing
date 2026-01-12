@@ -45,4 +45,32 @@ Thumbs.db
 *.tmp
 *.log
 
-activations/rollouts
+# Data and outputs (user-generated)
+data/
+outputs/
+/activations/
+
+# Research artifacts (keep in examples/)
+src/rollouts/*.json
+src/data/
+
+# Probe weights and model files
+*.pt
+probes/
+
+# Plots (generated)
+plots/
+
+# Old research scripts (kept for reference)
+run_experiment.py
+run_extract_activations.py
+extract_activations.py
+server.py
+main.py
+main.ipynb
+plan.md
+USAGE.md
+
+# Cache
+.cache/
+*.cache

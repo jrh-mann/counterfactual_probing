@@ -1,0 +1,29 @@
+{
+  "dataset": {
+    "path": "examples/reward_hacking/prompts.jsonl",
+    "prompt_field": "prompt",
+    "format": "jsonl"
+  },
+  "model": {
+    "name": "Qwen/Qwen2.5-0.5B",
+    "tensor_parallel_size": 1,
+    "gpu_memory_utilization": 0.9
+  },
+  "generation": {
+    "temperature": 0.7,
+    "max_tokens": 2048,
+    "num_counterfactuals": 50
+  },
+  "sampling": {
+    "method": "uniform_count",
+    "num_samples": 20,
+    "seed": 42
+  },
+  "scorer": {
+    "module": "counterfactual_probing.scorer.examples.reward_hacking",
+    "class": "RewardHackingScorer"
+  },
+  "output": {
+    "dir": "outputs/reward_hacking/"
+  }
+}
