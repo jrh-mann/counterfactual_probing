@@ -6,9 +6,168 @@ continuations from prefix-conditioned prompts, working entirely with
 token IDs for precision.
 """
 
+import warnings
 from typing import Any
 
 from transformers import PreTrainedTokenizer
+
+
+def validate_prefix_roundtrip(
+    token_ids: list[int],
+    tokenizer: PreTrainedTokenizer,
+    skip_special_tokens: bool = True,
+) -> dict[str, Any]:
+    """
+    Validate that token IDs survive a decode -> encode round-trip.
+
+    This is critical for ensuring token-level precision when creating
+    prefix-conditioned prompts.
+
+    Args:
+        token_ids: Token IDs to validate
+        tokenizer: Tokenizer to use for decode/encode
+        skip_special_tokens: Whether to skip special tokens in decode
+
+    Returns:
+        Dict with:
+        - valid: bool - whether round-trip succeeded
+        - original_ids: the input token IDs
+        - roundtrip_ids: token IDs after decode -> encode
+        - decoded_text: the intermediate decoded text
+        - mismatch_position: first position where tokens differ (if any)
+    """
+    if not token_ids:
+        return {
+            "valid": True,
+            "original_ids": [],
+            "roundtrip_ids": [],
+            "decoded_text": "",
+            "mismatch_position": None,
+        }
+
+    # Decode
+    decoded_text = tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens)
+
+    # Re-encode
+    roundtrip_ids = tokenizer.encode(decoded_text, add_special_tokens=False)
+
+    # Compare
+    valid = token_ids == roundtrip_ids
+    mismatch_position = None
+
+    if not valid:
+        # Find first mismatch
+        for i, (orig, rt) in enumerate(zip(token_ids, roundtrip_ids)):
+            if orig != rt:
+                mismatch_position = i
+                break
+        else:
+            # Length mismatch
+            mismatch_position = min(len(token_ids), len(roundtrip_ids))
+
+    return {
+        "valid": valid,
+        "original_ids": token_ids,
+        "roundtrip_ids": roundtrip_ids,
+        "decoded_text": decoded_text,
+        "mismatch_position": mismatch_position,
+    }
+
+
+def decode_preserving_tokens(
+    token_ids: list[int],
+    tokenizer: PreTrainedTokenizer,
+) -> str:
+    """
+    Decode token IDs to text, preserving ability to re-encode to same tokens.
+
+    This uses skip_special_tokens=False to avoid losing information,
+    but may include special token strings in the output.
+
+    Args:
+        token_ids: Token IDs to decode
+        tokenizer: Tokenizer to use
+
+    Returns:
+        Decoded text that should re-encode to same token IDs
+    """
+    # Don't skip special tokens to preserve information
+    return tokenizer.decode(token_ids, skip_special_tokens=False)
+
+
+def extract_continuation_safe(
+    full_ids: list[int],
+    prefix_ids: list[int],
+) -> dict[str, Any]:
+    """
+    Extract continuation tokens with validation.
+
+    Unlike extract_continuation(), this function validates the prefix match
+    and reports any issues instead of silently ignoring them.
+
+    Args:
+        full_ids: Complete token sequence
+        prefix_ids: Expected prefix token sequence
+
+    Returns:
+        Dict with:
+        - prefix_matched: bool - whether prefix matched exactly
+        - continuation: list[int] - extracted continuation tokens
+        - mismatch_position: int or None - first position of mismatch
+    """
+    prefix_len = len(prefix_ids)
+
+    # Check prefix match
+    actual_prefix = full_ids[:prefix_len]
+    prefix_matched = actual_prefix == prefix_ids
+
+    mismatch_position = None
+    if not prefix_matched:
+        for i, (expected, actual) in enumerate(zip(prefix_ids, actual_prefix)):
+            if expected != actual:
+                mismatch_position = i
+                break
+        else:
+            mismatch_position = min(len(prefix_ids), len(actual_prefix))
+
+    return {
+        "prefix_matched": prefix_matched,
+        "continuation": full_ids[prefix_len:],
+        "mismatch_position": mismatch_position,
+    }
+
+
+def create_prefix_prompt_tokens(
+    prefix_ids: list[int],
+    tokenizer: PreTrainedTokenizer,
+    messages: list[dict[str, str]],
+) -> list[int]:
+    """
+    Create prompt token IDs for generating continuations from a prefix.
+
+    This works entirely at the token level to avoid decode/encode drift.
+
+    Args:
+        prefix_ids: Token IDs of the prefix to continue from
+        tokenizer: Tokenizer for chat template
+        messages: List of chat messages (user/system)
+
+    Returns:
+        Token IDs for the full prompt including prefix
+    """
+    # Get the base prompt tokens (without assistant content)
+    base_prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    base_token_ids = tokenizer.encode(base_prompt, add_special_tokens=False)
+
+    # Append the prefix tokens directly
+    if prefix_ids:
+        return base_token_ids + prefix_ids
+    else:
+        return base_token_ids
 
 
 def create_prefix_prompt(
@@ -224,6 +383,87 @@ def generate_counterfactuals_batch(
     return counterfactuals
 
 
+def generate_all_branch_counterfactuals(
+    initial_token_ids: list[int],
+    branch_points: list[int],
+    messages: list[dict[str, str]],
+    tokenizer: PreTrainedTokenizer,
+    num_counterfactuals: int = 20,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+    llm: Any | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Generate counterfactuals for ALL branch points in a single batched call.
+
+    This is significantly faster than sequential generation because it allows
+    vLLM to batch all prompts together for better GPU utilization.
+
+    Args:
+        initial_token_ids: Token IDs from the initial rollout
+        branch_points: List of token indices to branch from
+        messages: Chat messages (user/system prompts)
+        tokenizer: Tokenizer for the model
+        num_counterfactuals: Number of continuations per branch point
+        temperature: Sampling temperature
+        max_tokens: Maximum tokens to generate
+        llm: Pre-initialized vLLM instance
+
+    Returns:
+        List of dicts, one per branch point, each containing:
+        - token_index: The branch point index
+        - prefix_token_ids: Token IDs up to this branch point
+        - counterfactuals: List of generated continuations
+    """
+    from vllm import SamplingParams
+
+    if llm is None:
+        raise ValueError("llm must be provided for batched generation")
+
+    # Build all prompts at once
+    all_prompts = []
+    prompt_to_branch = []  # Track which branch point each prompt belongs to
+
+    for token_idx in branch_points:
+        prefix_ids = initial_token_ids[:token_idx + 1]
+        prefix_prompt = create_prefix_prompt(prefix_ids, tokenizer, messages)
+
+        # Add num_counterfactuals copies of this prompt
+        for _ in range(num_counterfactuals):
+            all_prompts.append(prefix_prompt)
+            prompt_to_branch.append(token_idx)
+
+    # Single batched generation call
+    sampling_params = SamplingParams(
+        temperature=temperature,
+        max_tokens=max_tokens,
+        n=1,
+    )
+
+    outputs = llm.generate(all_prompts, sampling_params)
+
+    # Organize results by branch point
+    results_by_branch: dict[int, list[dict]] = {bp: [] for bp in branch_points}
+
+    for output, branch_idx in zip(outputs, prompt_to_branch):
+        generated_ids = list(output.outputs[0].token_ids)
+        results_by_branch[branch_idx].append({
+            "token_ids": generated_ids,
+        })
+
+    # Build final result list in branch point order
+    results = []
+    for token_idx in branch_points:
+        prefix_ids = initial_token_ids[:token_idx + 1]
+        results.append({
+            "token_index": token_idx,
+            "prefix_token_ids": prefix_ids,
+            "counterfactuals": results_by_branch[token_idx],
+        })
+
+    return results
+
+
 def generate_initial_rollout(
     messages: list[dict[str, str]],
     model_name: str,
@@ -278,3 +518,54 @@ def generate_initial_rollout(
         "token_ids": token_ids,
         "text": text,
     }
+
+
+def generate_initial_rollouts_batch(
+    prompts: list[str],
+    tokenizer: PreTrainedTokenizer,
+    temperature: float = 0.7,
+    max_tokens: int = 4096,
+    llm: Any = None,
+) -> list[dict[str, Any]]:
+    """
+    Generate initial rollouts for multiple prompts in a single batch.
+
+    This is much more efficient than calling generate_initial_rollout
+    repeatedly, as vLLM can parallelize the generation.
+
+    Args:
+        prompts: List of formatted prompt strings
+        tokenizer: Tokenizer for decoding
+        temperature: Sampling temperature
+        max_tokens: Maximum tokens to generate per rollout
+        llm: Pre-initialized vLLM instance (required)
+
+    Returns:
+        List of dicts, each with 'token_ids' and 'text'
+    """
+    from vllm import SamplingParams
+
+    if llm is None:
+        raise ValueError("llm parameter is required for batch generation")
+
+    # Create sampling params
+    sampling_params = SamplingParams(
+        temperature=temperature,
+        max_tokens=max_tokens,
+        n=1,
+    )
+
+    # Generate all at once
+    outputs = llm.generate(prompts, sampling_params)
+
+    # Extract results
+    results = []
+    for output in outputs:
+        token_ids = list(output.outputs[0].token_ids)
+        text = tokenizer.decode(token_ids, skip_special_tokens=True)
+        results.append({
+            "token_ids": token_ids,
+            "text": text,
+        })
+
+    return results

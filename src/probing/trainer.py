@@ -21,6 +21,7 @@ from sklearn.metrics import (
 from .config import ProbeConfig, MetricConfig
 from .result import ProbeResult
 from .smoothing import smooth_logits
+from .softmax_weighted import SoftmaxWeightedWrapper
 
 
 class ProbeTrainer:
@@ -42,6 +43,13 @@ class ProbeTrainer:
         'ridge': lambda cfg: Ridge(
             alpha=1.0 / cfg.regularization,  # Ridge uses alpha, inverse of C
             random_state=cfg.seed,
+        ),
+        'softmax_weighted': lambda cfg: SoftmaxWeightedWrapper(
+            temperature=getattr(cfg, 'softmax_temperature', 1.0),
+            learning_rate=0.01,
+            max_iter=cfg.max_iter,
+            weight_decay=1.0 / cfg.regularization if cfg.regularization > 0 else 0.0,
+            seed=cfg.seed,
         ),
     }
 
@@ -97,14 +105,30 @@ class ProbeTrainer:
 
         # 5. Train model
         model = self._create_model(config)
-        model.fit(X_train, y_train_binary if config.method == 'logistic' else y_train)
+
+        # Softmax-weighted probe needs group information
+        if config.method == 'softmax_weighted':
+            # Extract group IDs from metadata (indices into train set)
+            if metadata is not None:
+                # Build prompt_id -> group_idx mapping
+                prompt_ids = [m.get('prompt_id', i) for i, m in enumerate(metadata)]
+                unique_prompts = list(dict.fromkeys(prompt_ids))  # Preserve order
+                prompt_to_idx = {p: i for i, p in enumerate(unique_prompts)}
+                group_ids = np.array([prompt_to_idx[prompt_ids[i]] for i in train_idx])
+            else:
+                # Fall back to individual groups
+                group_ids = np.arange(len(train_idx))
+            model.set_group_ids(group_ids)
+
+        model.fit(X_train, y_train_binary if config.method in ('logistic', 'softmax_weighted') else y_train)
 
         # 6. Get predictions
-        if config.method == 'logistic':
+        if config.method in ('logistic', 'softmax_weighted'):
             train_proba = model.predict_proba(X_train)[:, 1]
             test_proba = model.predict_proba(X_test)[:, 1]
-            train_logits = np.log(train_proba / (1 - train_proba + 1e-10))
-            test_logits = np.log(test_proba / (1 - test_proba + 1e-10))
+            eps = 1e-10
+            train_logits = np.log((train_proba + eps) / (1 - train_proba + eps))
+            test_logits = np.log((test_proba + eps) / (1 - test_proba + eps))
         else:
             # Ridge regression - predictions are continuous
             train_proba = model.predict(X_train)

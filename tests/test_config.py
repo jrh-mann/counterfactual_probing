@@ -166,7 +166,7 @@ class TestDefaultValues:
 
         loaded = load_config(str(config_path))
 
-        assert loaded.sampling.method == "uniform_count"  # Default
+        assert loaded.sampling.method == "random"  # Default (pure random, no forced endpoints)
         assert loaded.sampling.num_samples == 20  # Default
 
     def test_output_defaults(self, tmp_path):

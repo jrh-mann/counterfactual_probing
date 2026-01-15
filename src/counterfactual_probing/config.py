@@ -42,15 +42,26 @@ class GenerationConfig(BaseModel):
 
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
     max_tokens: int = Field(default=4096, ge=1, description="Maximum tokens to generate")
+    max_tokens_retry: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Max tokens for retry attempts on truncated rollouts. "
+            "If None, uses max_tokens * 1.5. Set higher to handle long CoT."
+        )
+    )
     num_counterfactuals: int = Field(
         default=50,
         ge=1,
         description="Number of counterfactual continuations per sample point"
     )
     num_initial_rollouts: int = Field(
-        default=1,
+        default=3,
         ge=1,
-        description="Number of initial rollouts to generate per prompt"
+        description=(
+            "Number of initial rollouts to generate per prompt. "
+            "The shortest valid rollout (has </think>, not truncated) is selected."
+        )
     )
 
     @field_validator("temperature")
@@ -78,14 +89,18 @@ class GenerationConfig(BaseModel):
 class SamplingConfig(BaseModel):
     """Sampling configuration for selecting branch points."""
 
-    method: Literal["uniform_count", "density"] = Field(
-        default="uniform_count",
-        description="Sampling method: uniform_count or density"
+    method: Literal["random", "uniform_count", "density"] = Field(
+        default="random",
+        description=(
+            "Sampling method: 'random' (pure random, recommended), "
+            "'uniform_count' (deprecated, forces endpoints), "
+            "'density' (deprecated, forces endpoints)"
+        )
     )
     num_samples: int = Field(
         default=20,
         ge=1,
-        description="Number of sample points for uniform_count method"
+        description="Number of sample points for random/uniform_count methods"
     )
     density: float = Field(
         default=0.02,
@@ -96,6 +111,14 @@ class SamplingConfig(BaseModel):
     seed: int | None = Field(
         default=None,
         description="Random seed for reproducibility"
+    )
+    cot_boundary_token: int | None = Field(
+        default=None,
+        description=(
+            "Token ID marking end of chain-of-thought (e.g., </think> token). "
+            "If set, sampling will only occur before this token. "
+            "For Qwen3 models, use 151668 for the </think> token."
+        )
     )
 
     @field_validator("num_samples")
@@ -231,9 +254,10 @@ def create_default_config(
             "num_initial_rollouts": 1,
         },
         "sampling": {
-            "method": "uniform_count",
+            "method": "random",
             "num_samples": 20,
             "density": 0.02,
+            "cot_boundary_token": None,
         },
         "scorer": {
             "module": "counterfactual_probing.scorer.examples.dummy",

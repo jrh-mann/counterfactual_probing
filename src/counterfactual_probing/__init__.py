@@ -6,6 +6,7 @@ from .config import Config, create_default_config, load_config
 from .dataset import Dataset
 from .model_utils import ensure_experiment_dirs, get_experiment_paths, get_model_slug
 from .run import run, run_from_config
+from .run_staged import run_stage1, run_stage2, run_both_stages
 from .sampler import TokenSampler
 from .scorer import Scorer, load_scorer
 
@@ -22,5 +23,8 @@ __all__ = [
     "load_config",
     "load_scorer",
     "run",
+    "run_both_stages",
     "run_from_config",
+    "run_stage1",
+    "run_stage2",
 ]

@@ -152,7 +152,8 @@ class CounterfactualActivationExtractor:
 
         # Try dataset lookup
         if dataset_path:
-            prompt_id = output_data.get("prompt_id", metadata.get("id"))
+            # Use original prompt_id from metadata (e.g., "math_0929") not the sequential one
+            prompt_id = metadata.get("prompt_id") or output_data.get("prompt_id") or metadata.get("id")
             prompt = self._lookup_prompt_in_dataset(dataset_path, prompt_id)
             if prompt:
                 return prompt
@@ -177,7 +178,9 @@ class CounterfactualActivationExtractor:
         with open(path) as f:
             for line in f:
                 item = json.loads(line)
-                if item.get("id") == prompt_id:
+                # Check both 'prompt_id' and 'id' fields
+                item_id = item.get("prompt_id") or item.get("id")
+                if item_id == prompt_id:
                     return item.get("prompt")
 
         return None

@@ -70,11 +70,15 @@ class ProbeConfig:
     # === Probe Method ===
     # 'logistic': LogisticRegression (classification)
     # 'ridge': Ridge regression (continuous)
+    # 'softmax_weighted': CC++ softmax-weighted BCE loss (Cunningham et al., 2026)
     # Extensible: add new methods to PROBE_METHODS registry
     method: str = 'logistic'
 
-    # Regularization strength (C for logistic, alpha for ridge)
+    # Regularization strength (C for logistic, alpha for ridge, weight_decay for softmax_weighted)
     regularization: float = 1.0
+
+    # Temperature for softmax weighting (only used by softmax_weighted method)
+    softmax_temperature: float = 1.0
 
     # Max iterations for optimization
     max_iter: int = 1000
@@ -103,7 +107,7 @@ class ProbeConfig:
         if self.smoothing not in valid_smoothing:
             raise ValueError(f"smoothing must be one of {valid_smoothing}")
 
-        valid_methods = ('logistic', 'ridge')  # Extend as needed
+        valid_methods = ('logistic', 'ridge', 'softmax_weighted')
         if self.method not in valid_methods:
             raise ValueError(f"method must be one of {valid_methods}")
 
@@ -122,6 +126,7 @@ class ProbeConfig:
             'ema_alpha': self.ema_alpha,
             'method': self.method,
             'regularization': self.regularization,
+            'softmax_temperature': self.softmax_temperature,
             'max_iter': self.max_iter,
             'label_threshold': self.label_threshold,
             'normalize': self.normalize,
